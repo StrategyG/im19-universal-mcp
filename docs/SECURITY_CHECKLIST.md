@@ -5,6 +5,8 @@
 - [x] Google callback does not activate accounts until same MCP principal submits a one-time confirmation code.
 - [x] Confirmation code hashed at rest; staged OAuth tokens encrypted and expire.
 - [x] DB refresh lease and CAS guard prevent stale worker credential resurrection.
+- [x] Manual `im19-purge-expired` command deletes expired sensitive staging records.
+- [ ] Schedule and monitor regular trusted backend retention cleanup.
 - [x] Google API URL allowlist and read-only operations.
 - [x] Drive metadata-only default consent and explicit restricted content scope.
 - [x] Bounded Drive text response and file ID/query validation.
