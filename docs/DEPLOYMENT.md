@@ -73,7 +73,21 @@ for `/oauth/google/callback`.
 7. Check `RATE_LIMITED` behavior, test restore procedures, scan egress paths,
    and review all Google's restricted-scope requirements.
 
-## 5. Release gates (NOT YET MET)
+## 5. OAuth retention operations
+
+Schedule the following inside a trusted operations context after migrations:
+
+```bash
+im19-purge-expired
+# Or with the container: docker compose run --rm gateway im19-purge-expired
+```
+
+It only returns deletion counts. Expired staged Google credentials and OAuth
+states otherwise remain encrypted in the database after their logical TTL;
+logical expiry alone is not a retention policy. A production scheduler, job
+monitoring and operational alarm must be configured separately.
+
+## 6. Release gates (NOT YET MET)
 
 - Passing Python 3.11/3.12 CI, Docker build and dependency audit.
 - First-party OIDC **authenticated browser** portal with session-bound link
