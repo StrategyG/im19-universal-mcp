@@ -1,0 +1,216 @@
+"""SQLAlchemy storage, encrypted credentials and one-time OAuth state.
+
+Production must use PostgreSQL and externally managed Fernet encryption keys.
+Schema creation is explicit, never automatic on unauthenticated requests.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import secrets
+import time
+from datetime import datetime, timezone
+
+from cryptography.fernet import Fernet
+from sqlalchemy import Float, Integer, String, Text, create_engine, delete
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class PendingState(Base):
+    __tablename__ = "oauth_states"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    scopes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    verifier_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class Credential(Base):
+    __tablename__ = "oauth_credentials"
+    subject: Mapped[str] = mapped_column(String(255), primary_key=True)
+    service: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class PendingLink(Base):
+    """Provider credential staged for explicit authenticated MCP confirmation.
+
+    This table never contains raw confirmation codes or plaintext OAuth tokens.
+    """
+    __tablename__ = "oauth_pending_links"
+    confirmation_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    service: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[str] = mapped_column(String(40), nullable=False)
+    subject_pseudonym: Mapped[str] = mapped_column(String(64), nullable=False)
+    service: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class Vault:
+    def __init__(self, database_url: str, *, encryption_key: str, audit_salt: str = ""):
+        if not encryption_key:
+            raise ValueError("encryption_key_required")
+        self.cipher = Fernet(encryption_key.encode("ascii"))
+        self.audit_salt = audit_salt.encode("utf-8")
+        self.engine = create_engine(database_url, pool_pre_ping=True)
+        self.sessions = sessionmaker(self.engine, expire_on_commit=False)
+
+    def initialize_schema(self) -> None:
+        Base.metadata.create_all(self.engine)
+
+    def encrypt(self, value: object) -> str:
+        return self.cipher.encrypt(json.dumps(value, separators=(",", ":")).encode("utf-8")).decode("ascii")
+
+    def decrypt(self, ciphertext: str) -> object:
+        return json.loads(self.cipher.decrypt(ciphertext.encode("ascii")))
+
+    def create_state(
+        self, state: str, subject: str, scopes: tuple[str, ...], verifier: str,
+        expires: float, *, service: str = "youtube"
+    ) -> None:
+        """Create an opaque state bound to an MCP principal and provider service."""
+        if service not in {"youtube", "drive"} or not subject or not verifier:
+            raise ValueError("oauth_state_binding_invalid")
+        hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
+        with self.sessions.begin() as session:
+            session.add(PendingState(
+                state_hash=hashed, subject=subject,
+                scopes_json=json.dumps({"scopes": scopes, "service": service}),
+                verifier_ciphertext=self.encrypt(verifier), expires_at=expires,
+            ))
+
+    def consume_state(self, state: str) -> tuple[str, str, tuple[str, ...], str]:
+        """Atomically remove state; concurrent callbacks cannot redeem it twice.
+
+        DELETE RETURNING is supported by PostgreSQL and modern SQLite (>=3.35).
+        Expired states remain consumed, including on the denial path.
+        """
+        hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
+        stmt = (
+            delete(PendingState)
+            .where(PendingState.state_hash == hashed)
+            .returning(
+                PendingState.subject, PendingState.scopes_json,
+                PendingState.verifier_ciphertext, PendingState.expires_at,
+            )
+        )
+        with self.sessions.begin() as session:
+            row = session.execute(stmt).one_or_none()
+        if row is None:
+            raise PermissionError("oauth_state_unknown_or_reused")
+        if row.expires_at <= time.time():
+            raise PermissionError("oauth_state_expired")
+        binding = json.loads(row.scopes_json)
+        if not isinstance(binding, dict) or binding.get("service") not in {"youtube", "drive"}:
+            raise PermissionError("oauth_state_binding_invalid")
+        scopes = binding.get("scopes")
+        if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
+            raise PermissionError("oauth_state_scope_invalid")
+        return row.subject, binding["service"], tuple(scopes), str(self.decrypt(row.verifier_ciphertext))
+
+    def stage_link(
+        self, subject: str, service: str, account_id: str,
+        token: dict, token_expires_at: float, *, ttl_seconds: int = 300
+    ) -> str:
+        """Encrypt provider data; return a short-lived code shown in browser only."""
+        if not subject or service not in {"youtube", "drive"} or not account_id:
+            raise ValueError("invalid_pending_link")
+        if not 30 <= ttl_seconds <= 600 or token_expires_at <= time.time():
+            raise ValueError("invalid_link_expiration")
+        code = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(code.encode("ascii")).hexdigest()
+        with self.sessions.begin() as session:
+            session.add(PendingLink(
+                confirmation_hash=digest, subject=subject, service=service,
+                account_id=account_id, token_ciphertext=self.encrypt(token),
+                token_expires_at=token_expires_at,
+                expires_at=time.time() + ttl_seconds,
+            ))
+        return code
+
+    def confirm_link(self, subject: str, service: str, confirmation_code: str) -> tuple[str, dict, float]:
+        """Consume exact user's one-time claim and return staged encrypted credentials.
+
+        A wrong-user attempt does NOT invalidate another user's claim.
+        Atomic DELETE RETURNING prevents any claim from being confirmed twice.
+        """
+        if (not isinstance(confirmation_code, str) or
+                not 20 <= len(confirmation_code) <= 256 or
+                not subject or service not in {"youtube", "drive"}):
+            raise PermissionError("confirmation_invalid_or_expired")
+        digest = hashlib.sha256(confirmation_code.encode("utf-8")).hexdigest()
+        stmt = (
+            delete(PendingLink)
+            .where(PendingLink.confirmation_hash == digest,
+                   PendingLink.subject == subject,
+                   PendingLink.service == service)
+            .returning(PendingLink.account_id, PendingLink.token_ciphertext,
+                       PendingLink.token_expires_at, PendingLink.expires_at)
+        )
+        with self.sessions.begin() as session:
+            row = session.execute(stmt).one_or_none()
+        if row is None or row.expires_at <= time.time() or row.token_expires_at <= time.time():
+            raise PermissionError("confirmation_invalid_or_expired")
+        data = self.decrypt(row.token_ciphertext)
+        if not isinstance(data, dict):
+            raise PermissionError("confirmation_invalid_or_expired")
+        return row.account_id, data, row.token_expires_at
+
+    def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
+        ciphertext = self.encrypt(token)
+        with self.sessions.begin() as session:
+            row = session.get(Credential, (subject, service))
+            if row is None:
+                row = Credential(subject=subject, service=service, token_ciphertext=ciphertext,
+                                 account_id=account_id, expires_at=expires)
+                session.add(row)
+            if row.account_id != account_id:
+                raise PermissionError("account_rebind_requires_disconnect")
+            row.token_ciphertext = ciphertext
+            row.expires_at = expires
+
+    def get_credential(self, subject: str, service: str) -> tuple[str, dict, float] | None:
+        with self.sessions() as session:
+            row = session.get(Credential, (subject, service))
+            if row is None:
+                return None
+            result = self.decrypt(row.token_ciphertext)
+            if not isinstance(result, dict):
+                raise ValueError("token_data_invalid")
+            return row.account_id, result, row.expires_at
+
+    def delete_credential(self, subject: str, service: str) -> bool:
+        with self.sessions.begin() as session:
+            row = session.get(Credential, (subject, service))
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def audit(self, subject: str, service: str, action: str, status: str) -> None:
+        pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()
+        with self.sessions.begin() as session:
+            session.add(AuditEvent(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                subject_pseudonym=pseudonym, service=service, action=action,
+                status=status, request_id=secrets.token_hex(16),
+            ))

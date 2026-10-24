@@ -1,0 +1,21 @@
+# Security checklist
+
+- [x] Provider OAuth separate from MCP client OAuth.
+- [x] OAuth PKCE and atomic one-time, service-bound state with TTL.
+- [x] Google API URL allowlist and read-only operations.
+- [x] Drive metadata-only default consent and explicit restricted content scope.
+- [x] Bounded Drive text response and file ID/query validation.
+- [x] Token ciphertext at rest (Fernet).
+- [x] Authenticated user subject never comes from tool args.
+- [x] MCP access token issuer, audience, expiry, scope checked via introspection.
+- [x] No provider mutation tools exposed.
+- [x] Multi-user store keys and sanitized audit event schema.
+- [ ] Rotate encryption keys via managed KMS.
+- [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
+- [ ] Human approval persistence, single-use semantics and idempotency.
+- [ ] Distributed rate limiting and refresh locking.
+- [ ] Complete backup, DR and pen-test exercises.
+- [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
+- [ ] Google restricted-scope verification/security assessment before public Drive content access.
+- [ ] Browser session binding for Google OAuth initiation and callback.
+- [ ] Production audit retention and redaction review.

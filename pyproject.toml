@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "im19-universal-mcp"
+version = "0.2.0"
+description = "IM19 Institutional Universal MCP — secure-by-default integration platform"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=2.0.1,<3.0.0",
+  "httpx>=0.28,<1.0",
+  "cryptography>=50.0.2,<51",
+  "sqlalchemy>=2.0,<3.0",
+  "psycopg[binary]>=3.2,<4",
+  "uvicorn>=0.31,<1",
+  "pydantic>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<2",
+  "ruff>=0.9,<1",
+  "mypy>=1.13,<2",
+  "alembic>=1.13,<2",
+]
+
+[project.scripts]
+im19-mcp = "im19_mcp.server:main"
+im19-gateway = "im19_mcp.gateway:main"
+im19-init-db = "im19_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
