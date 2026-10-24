@@ -108,9 +108,14 @@ def register_tools(
         if found is None:
             return {"status": "AUTH_REQUIRED", "service": service}
         return {
-            "status": "CONNECTED" if found[2] > time.time() else "EXPIRED_OR_REFRESH_REQUIRED",
+            "status": (
+                "CREDENTIAL_STORED_NOT_LIVE_VERIFIED"
+                if found[2] > time.time() else "EXPIRED_OR_REFRESH_REQUIRED"
+            ),
             "service": service, "account_id": found[0],
             "scopes": list(found[1].get("scopes", [])),
+            "provider_live_verified": False,
+            "note": "Locally stored OAuth grant; verify live provider API access separately.",
         }
 
     @server.tool(name="request_service_authorization")
