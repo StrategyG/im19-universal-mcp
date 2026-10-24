@@ -1,5 +1,4 @@
 """Fail-closed operational health vs readiness checks."""
-import pytest
 from sqlalchemy import create_engine, text
 
 from im19_mcp.readiness import database_ready
