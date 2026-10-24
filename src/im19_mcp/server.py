@@ -247,8 +247,10 @@ def register_tools(
 
 def create_stdio_server(settings: Settings | None = None) -> MCPServer:
     cfg = settings or Settings.from_env()
-    vault = Vault(cfg.database_url, encryption_key=cfg.vault_key,
-                  audit_salt=cfg.audit_salt) if cfg.vault_key else None
+    vault = Vault(
+        cfg.database_url, encryption_key=cfg.vault_key,
+        audit_salt=cfg.audit_salt, previous_keys=cfg.vault_previous_keys,
+    ) if cfg.vault_key else None
     if vault:
         vault.initialize_schema()
     oauth = GoogleOAuth(cfg, vault) if vault and cfg.google_enabled() else None
