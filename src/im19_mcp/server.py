@@ -13,8 +13,10 @@ from typing import Any
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
+from starlette.concurrency import run_in_threadpool
 
 from im19_mcp.config import Settings
+from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
 from im19_mcp.drive import DriveClient
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError, SCOPES
 from im19_mcp.registry import SERVICES, list_services
@@ -37,6 +39,7 @@ def register_tools(
     oauth: GoogleOAuth | None, allow_stdio_dev: bool = False,
     provider_factory: Callable[[str], YouTubeClient] = YouTubeClient,
     drive_factory: Callable[[str], DriveClient] = DriveClient,
+    distributed_quota: DistributedQuota | None = None,
 ) -> None:
     """Register read-only tools. Service credentials stay in the encrypted vault."""
 
@@ -46,6 +49,23 @@ def register_tools(
     def audit(user: str, service: str, action: str, status: str) -> None:
         if vault:
             vault.audit(user, service, action, status)
+
+    def tool_quota(user: str, action: str, *, limit: int) -> dict | None:
+        """Synchronous tool admission with a verified MCP subject only."""
+        if distributed_quota is None:
+            return None
+        try:
+            allowed, retry = distributed_quota.consume(
+                action, user, limit=limit, window_seconds=60,
+            )
+        except (QuotaUnavailable, ValueError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "quota_backend_unavailable"}
+        return None if allowed else {"status": "RATE_LIMITED", "retry_after_seconds": retry}
+
+    async def async_tool_quota(user: str, action: str, *, limit: int) -> dict | None:
+        if distributed_quota is None:
+            return None
+        return await run_in_threadpool(tool_quota, user, action, limit=limit)
 
     @server.resource("im19://capabilities")
     def capabilities_resource() -> str:
@@ -102,6 +122,9 @@ def register_tools(
             return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
         if service not in {"youtube", "drive"}:
             return {"status": "NOT_IMPLEMENTED", "service": service}
+        denied = tool_quota(user, "mcp:connection-status", limit=60)
+        if denied is not None:
+            return denied
         if vault is None:
             return {"status": "NOT_CONFIGURED", "service": service}
         found = vault.get_credential(user, service)
@@ -130,6 +153,9 @@ def register_tools(
             return {"status": "NOT_IMPLEMENTED", "service": service}
         if oauth is None:
             return {"status": "NOT_CONFIGURED", "reason": "google_oauth_credentials_required"}
+        denied = tool_quota(user, "mcp:oauth-begin", limit=5)
+        if denied is not None:
+            return denied
         try:
             return oauth.begin(user, service=service, analytics=include_analytics,
                               include_content=include_content)
@@ -150,6 +176,9 @@ def register_tools(
             return {"status": "NOT_IMPLEMENTED", "service": service}
         if oauth is None:
             return {"status": "NOT_CONFIGURED", "reason": "google_oauth_credentials_required"}
+        denied = tool_quota(user, "mcp:oauth-confirm", limit=10)
+        if denied is not None:
+            return denied
         try:
             return oauth.confirm(user, service, confirmation_code)
         except OAuthError:
@@ -172,6 +201,9 @@ def register_tools(
             return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
         if oauth is None:
             return {"status": "NOT_CONFIGURED", "reason": "google_oauth_credentials_required"}
+        denied = await async_tool_quota(user, "mcp:provider-reads", limit=60)
+        if denied is not None:
+            return denied
         try:
             account_id, access = await oauth.access_token(user, required, service=service)
             client = factory(access)
@@ -247,8 +279,10 @@ def register_tools(
 
 def create_stdio_server(settings: Settings | None = None) -> MCPServer:
     cfg = settings or Settings.from_env()
-    vault = Vault(cfg.database_url, encryption_key=cfg.vault_key,
-                  audit_salt=cfg.audit_salt) if cfg.vault_key else None
+    vault = Vault(
+        cfg.database_url, encryption_key=cfg.vault_key,
+        audit_salt=cfg.audit_salt, previous_keys=cfg.vault_previous_keys,
+    ) if cfg.vault_key else None
     if vault:
         vault.initialize_schema()
     oauth = GoogleOAuth(cfg, vault) if vault and cfg.google_enabled() else None

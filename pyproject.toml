@@ -32,6 +32,8 @@ im19-mcp = "im19_mcp.server:main"
 im19-gateway = "im19_mcp.gateway:main"
 im19-init-db = "im19_mcp.cli:main"
 im19-purge-expired = "im19_mcp.cli:purge_expired"
+im19-rotate-keys = "im19_mcp.cli:rotate_keys"
+im19-verify-primary-key = "im19_mcp.cli:verify_primary_key"
 
 [tool.setuptools.packages.find]
 where = ["src"]

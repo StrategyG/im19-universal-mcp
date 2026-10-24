@@ -58,3 +58,61 @@ class RateLimitMiddleware:
             await response(scope, receive, send)
             return
         await self.app(scope, receive, send)
+
+
+class DistributedRateLimitMiddleware:
+    """Pre-auth rate admission shared across gateway replicas via PostgreSQL.
+
+    Uses only the trusted ASGI socket peer, never client-controlled HTTP
+    forwarding headers. An external HTTPS ingress must enforce per-real-IP
+    limits independently when it terminates client connections.
+    """
+
+    def __init__(
+        self, app, *, quota, requests_per_minute: int = 120,
+        exempt_paths: frozenset[str] = frozenset({"/health", "/ready"}),
+    ):
+        if not 1 <= requests_per_minute <= 100000:
+            raise ValueError("invalid_rate_limit")
+        self.app = app
+        self.quota = quota
+        self.limit = requests_per_minute
+        self.exempt_paths = exempt_paths
+
+    async def __call__(self, scope, receive, send):
+        from starlette.concurrency import run_in_threadpool
+        from im19_mcp.distributed_quota import QuotaUnavailable
+
+        if scope["type"] != "http" or scope.get("path") in self.exempt_paths:
+            await self.app(scope, receive, send)
+            return
+        socket_peer = scope.get("client")
+        if not isinstance(socket_peer, (tuple, list)) or not socket_peer or not socket_peer[0]:
+            response = JSONResponse(
+                {"error": "QUOTA_UNAVAILABLE"}, status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+            return
+        # No Forwarded/X-Forwarded-For trust: the immediate socket peer is a
+        # trustworthy ingress identity but may represent many end users.
+        try:
+            allowed, retry = await run_in_threadpool(
+                self.quota.consume, "http:peer", str(socket_peer[0]),
+                limit=self.limit, window_seconds=60,
+            )
+        except (QuotaUnavailable, ValueError):
+            response = JSONResponse(
+                {"error": "QUOTA_UNAVAILABLE"}, status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+            return
+        if not allowed:
+            response = JSONResponse(
+                {"error": "RATE_LIMITED"}, status_code=429,
+                headers={"Retry-After": str(retry), "Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
