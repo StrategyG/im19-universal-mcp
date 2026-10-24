@@ -70,6 +70,11 @@ def test_production_config_denies_sqlite_dev_subject_and_weak_salt(cfg):
     with pytest.raises(ValueError, match="production_requires_strong_audit_salt"):
         replace(strong, dev_subject="").require_remote()
     replace(strong, dev_subject="", audit_salt="x" * 32).require_remote()
+    with pytest.raises(ValueError, match="production_legacy_key_fallback_forbidden"):
+        replace(
+            strong, dev_subject="", audit_salt="x" * 32,
+            vault_previous_keys=("synthetic-fallback-value",),
+        ).require_remote()
 
 
 def test_create_app_requires_valid_issuer_settings(cfg):
