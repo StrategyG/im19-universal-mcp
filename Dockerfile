@@ -3,6 +3,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 RUN pip install --no-cache-dir .
 RUN useradd --create-home --uid 10001 im19
 USER im19
