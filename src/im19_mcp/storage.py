@@ -12,8 +12,9 @@ import secrets
 import time
 from datetime import datetime, timezone
 
-from cryptography.fernet import Fernet
-from sqlalchemy import Float, Integer, String, Text, create_engine, delete
+from cryptography.fernet import Fernet, MultiFernet
+from cryptography.fernet import InvalidToken
+from sqlalchemy import Float, Integer, String, Text, create_engine, delete, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -37,6 +38,8 @@ class Credential(Base):
     token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     account_id: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    refresh_owner: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    refresh_until: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
 
 
 class PendingLink(Base):
@@ -66,15 +69,36 @@ class AuditEvent(Base):
 
 
 class Vault:
-    def __init__(self, database_url: str, *, encryption_key: str, audit_salt: str = ""):
+    def __init__(
+        self, database_url: str, *, encryption_key: str, audit_salt: str = "",
+        previous_keys: tuple[str, ...] = (),
+    ):
         if not encryption_key:
             raise ValueError("encryption_key_required")
-        self.cipher = Fernet(encryption_key.encode("ascii"))
+        if encryption_key in previous_keys or len(previous_keys) != len(set(previous_keys)):
+            raise ValueError("duplicate_encryption_keys_forbidden")
+        try:
+            primary = Fernet(encryption_key.encode("ascii"))
+            self._primary_cipher = primary
+            self._has_previous_keys = bool(previous_keys)
+            # Keep the single-key Fernet object for backward compatibility.
+            # MultiFernet always ENCRYPTS with the first (new) key.
+            self.cipher = (
+                MultiFernet([primary] + [Fernet(k.encode("ascii")) for k in previous_keys])
+                if previous_keys else primary
+            )
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise ValueError("fernet_key_invalid") from exc
         self.audit_salt = audit_salt.encode("utf-8")
         self.engine = create_engine(database_url, pool_pre_ping=True)
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize_schema(self) -> None:
+        # Import optional governance models before local-dev create_all.
+        # Production schema changes still require explicit Alembic migrations.
+        from im19_mcp.governance import approvals  # noqa: F401
+        from im19_mcp import distributed_quota  # noqa: F401
+
         Base.metadata.create_all(self.engine)
 
     def encrypt(self, value: object) -> str:
@@ -82,6 +106,66 @@ class Vault:
 
     def decrypt(self, ciphertext: str) -> object:
         return json.loads(self.cipher.decrypt(ciphertext.encode("ascii")))
+
+    def verify_primary_key_coverage(self) -> dict[str, int]:
+        """Fail closed if any sensitive row still requires an old encryption key.
+
+        Run after offline rotation, before removing previous keys from service
+        configuration. Uses only the new primary key, never the fallback ring.
+        """
+        counts: dict[str, int] = {}
+        with self.sessions() as session:
+            for model, attr, label in (
+                (Credential, Credential.token_ciphertext, "oauth_credentials"),
+                (PendingState, PendingState.verifier_ciphertext, "oauth_states"),
+                (PendingLink, PendingLink.token_ciphertext, "oauth_pending_links"),
+            ):
+                tokens = session.execute(select(attr).select_from(model)).scalars()
+                count = 0
+                for token in tokens:
+                    try:
+                        self._primary_cipher.decrypt(token.encode("ascii"))
+                    except (InvalidToken, UnicodeError) as exc:
+                        raise ValueError("primary_key_coverage_failed") from exc
+                    count += 1
+                counts[label] = count
+        return counts
+
+    def rotate_encryption(self, *, offline_maintenance_ack: bool = False) -> dict[str, int]:
+        """Offline, all-or-nothing re-encryption of every sensitive database field.
+
+        A full database transaction ensures that a bad ciphertext rolls back
+        previously visited records. PostgreSQL SELECT FOR UPDATE protects rows
+        from concurrent token changes, but callers MUST stop all writer
+        processes and back up the DB. No live zero-downtime guarantee.
+        """
+        if not offline_maintenance_ack:
+            raise PermissionError("offline_maintenance_ack_required")
+        if not self._has_previous_keys:
+            raise ValueError("previous_key_required_for_rotation")
+        if not isinstance(self.cipher, MultiFernet):
+            raise ValueError("rotation_cipher_invalid")
+        counters: dict[str, int] = {}
+        try:
+            with self.sessions.begin() as session:
+                for model, field, name in (
+                    (Credential, "token_ciphertext", "oauth_credentials"),
+                    (PendingState, "verifier_ciphertext", "oauth_states"),
+                    (PendingLink, "token_ciphertext", "oauth_pending_links"),
+                ):
+                    rows = session.execute(select(model).with_for_update()).scalars().all()
+                    for row in rows:
+                        original = getattr(row, field)
+                        replaced = self.cipher.rotate(original.encode("ascii")).decode("ascii")
+                        setattr(row, field, replaced)
+                    session.flush()
+                    counters[name] = len(rows)
+        except (InvalidToken, UnicodeError) as exc:
+            raise ValueError("rotation_decryption_failed_database_unchanged") from exc
+        # Verify outside the write transaction. The maintenance run must be
+        # offline to guarantee nobody creates old-key rows after rotation.
+        self.verify_primary_key_coverage()
+        return counters
 
     def create_state(
         self, state: str, subject: str, scopes: tuple[str, ...], verifier: str,
@@ -187,6 +271,79 @@ class Vault:
                 raise PermissionError("account_rebind_requires_disconnect")
             row.token_ciphertext = ciphertext
             row.expires_at = expires
+            # A newly confirmed authorization invalidates any stale refresh worker.
+            row.refresh_owner = ""
+            row.refresh_until = 0.0
+
+    def acquire_refresh_lease(
+        self, subject: str, service: str, owner: str, *,
+        now: float, lease_seconds: int = 30
+    ) -> tuple[str, dict, float] | None:
+        """Lease a specific account's refresh across workers using SQL UPDATE.
+
+        Leases use DB time parameters and atomically compare expiration. The
+        provider request takes place *outside* the transaction. Replaced or
+        revoked credentials cannot be resurrected by stale workers.
+        """
+        if not owner or not 10 <= lease_seconds <= 120:
+            raise ValueError("refresh_lease_invalid")
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.refresh_until <= now,
+            )
+            .values(refresh_owner=owner, refresh_until=now + lease_seconds)
+            .returning(Credential.account_id, Credential.token_ciphertext,
+                       Credential.expires_at)
+        )
+        with self.sessions.begin() as session:
+            row = session.execute(stmt).one_or_none()
+        if row is None:
+            return None
+        data = self.decrypt(row.token_ciphertext)
+        if not isinstance(data, dict):
+            raise ValueError("token_data_invalid")
+        return row.account_id, data, row.expires_at
+
+    def complete_refresh(
+        self, subject: str, service: str, owner: str, account_id: str,
+        token: dict, expires: float
+    ) -> bool:
+        """Only the still-current lease owner may persist replacement tokens."""
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.account_id == account_id,
+                Credential.refresh_owner == owner,
+            )
+            .values(
+                token_ciphertext=self.encrypt(token),
+                expires_at=expires,
+                refresh_owner="",
+                refresh_until=0.0,
+            )
+        )
+        with self.sessions.begin() as session:
+            result = session.execute(stmt)
+            return bool(result.rowcount)
+
+    def release_refresh_lease(self, subject: str, service: str, owner: str) -> None:
+        """Release only the caller's current lease, never another worker's."""
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.refresh_owner == owner,
+            )
+            .values(refresh_owner="", refresh_until=0.0)
+        )
+        with self.sessions.begin() as session:
+            session.execute(stmt)
 
     def get_credential(self, subject: str, service: str) -> tuple[str, dict, float] | None:
         with self.sessions() as session:
@@ -205,6 +362,28 @@ class Vault:
                 return False
             session.delete(row)
             return True
+
+    def purge_expired(self, *, now: float | None = None) -> dict[str, int]:
+        """Delete obsolete OAuth transactions and encrypted pending credentials.
+
+        Call from a scheduled *trusted backend* task, never via public MCP.
+        Encrypted pending tokens otherwise remain in the database past TTL.
+        """
+        cutoff = time.time() if now is None else now
+        with self.sessions.begin() as session:
+            states = session.execute(
+                delete(PendingState).where(PendingState.expires_at <= cutoff)
+            )
+            links = session.execute(
+                delete(PendingLink).where(
+                    (PendingLink.expires_at <= cutoff) |
+                    (PendingLink.token_expires_at <= cutoff)
+                )
+            )
+            return {
+                "oauth_states": max(int(states.rowcount or 0), 0),
+                "oauth_pending_links": max(int(links.rowcount or 0), 0),
+            }
 
     def audit(self, subject: str, service: str, action: str, status: str) -> None:
         pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()

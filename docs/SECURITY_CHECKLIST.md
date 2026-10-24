@@ -2,6 +2,11 @@
 
 - [x] Provider OAuth separate from MCP client OAuth.
 - [x] OAuth PKCE and atomic one-time, service-bound state with TTL.
+- [x] Google callback does not activate accounts until same MCP principal submits a one-time confirmation code.
+- [x] Confirmation code hashed at rest; staged OAuth tokens encrypted and expire.
+- [x] DB refresh lease and CAS guard prevent stale worker credential resurrection.
+- [x] Manual `im19-purge-expired` command deletes expired sensitive staging records.
+- [ ] Schedule and monitor regular trusted backend retention cleanup.
 - [x] Google API URL allowlist and read-only operations.
 - [x] Drive metadata-only default consent and explicit restricted content scope.
 - [x] Bounded Drive text response and file ID/query validation.
@@ -10,12 +15,25 @@
 - [x] MCP access token issuer, audience, expiry, scope checked via introspection.
 - [x] No provider mutation tools exposed.
 - [x] Multi-user store keys and sanitized audit event schema.
-- [ ] Rotate encryption keys via managed KMS.
+- [x] Offline MultiFernet rotation covers encrypted credentials, PKCE states and pending links; transaction rollback, primary-only verification tested.
+- [x] Production gateway forbids legacy fallback decryption keys.
+- [ ] Deploy managed KMS/HSM key custody, tested backup-key retention and scheduled human-approved rotation workflows.
 - [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
-- [ ] Human approval persistence, single-use semantics and idempotency.
-- [ ] Distributed rate limiting and refresh locking.
-- [ ] Complete backup, DR and pen-test exercises.
+- [x] Backend approval ledger: expiring one-time token, exact subject/provider/account/action/resource/payload scope, and transactional idempotency receipts.
+- [x] PostgreSQL CI concurrency checks for approvals and idempotency uniqueness.
+- [ ] Independently authenticated human approval portal, authoritative approver roles and persisted evidence validation.
+- [ ] Write-adapter orchestration, provider reconciliation after uncertain outcomes and live acceptance tests.
+- [x] PostgreSQL-backed fixed-window per-socket-peer and verified MCP subject quotas, atomically enforced across worker pools; failure denies requests.
+- [x] Rate quota row pseudonymization and scheduled-cleanup command (deployment of scheduler still pending).
+- [ ] Trusted HTTPS ingress real-client/WAF rate limits, distributed abuse protection, operational quota dashboards and latency/load testing.
+- [x] Production configuration refuses SQLite, weak audit salt and development subject identities.
+- [x] Database readiness endpoint denies readiness on unavailable/outdated schema (revision 0005 includes shared rate quota table).
+- [x] Database refresh locking with expiring owner leases (load testing still needed).
+- [x] Disposable PostgreSQL CI smoke test of encrypted synthetic pg_dump/pg_restore and schema readiness.
+- [ ] Production backup retention, PITR/restore drill, KMS historical key recovery, RPO/RTO acceptance, and external penetration test.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
 - [ ] Google restricted-scope verification/security assessment before public Drive content access.
-- [ ] Browser session binding for Google OAuth initiation and callback.
+- [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).
+- [ ] Ingress reverse-proxy query log redaction for Google `code` and `state`.
 - [ ] Production audit retention and redaction review.
+- [ ] Approver evidence retention policy, tamper-evident audit exports and reviewer roles.

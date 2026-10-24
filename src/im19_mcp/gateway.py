@@ -11,17 +11,21 @@ from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
+from sqlalchemy import create_engine
 from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from im19_mcp.config import Settings
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError
-from im19_mcp.rate_limit import RateLimitMiddleware
+from im19_mcp.distributed_quota import DistributedQuota
+from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddleware
+from im19_mcp.readiness import database_ready
 from im19_mcp.server import register_tools
 from im19_mcp.storage import Vault
 
@@ -71,10 +75,15 @@ class IntrospectionVerifier(TokenVerifier):
         )
 
 
-def create_gateway(settings: Settings | None = None) -> MCPServer:
+def create_gateway(
+    settings: Settings | None = None, *, quota: DistributedQuota | None = None,
+) -> MCPServer:
     cfg = settings or Settings.from_env()
     cfg.require_remote()
-    vault = Vault(cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt)
+    vault = Vault(
+        cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt,
+        previous_keys=cfg.vault_previous_keys,
+    )
     # Database schema must be created through an explicit migration/bootstrap step.
     oauth = GoogleOAuth(cfg, vault) if cfg.google_enabled() else None
     server = MCPServer(
@@ -87,28 +96,56 @@ def create_gateway(settings: Settings | None = None) -> MCPServer:
             validate_token_resource=True,
         ),
     )
-    register_tools(server, settings=cfg, vault=vault, oauth=oauth)
+    effective_quota = (
+        quota if quota is not None else
+        DistributedQuota(vault.engine, secret=cfg.audit_salt)
+        if cfg.deployment_environment == "production" else None
+    )
+    register_tools(server, settings=cfg, vault=vault, oauth=oauth,
+                   distributed_quota=effective_quota)
 
     @server.custom_route("/health", methods=["GET"])
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": "im19-universal-mcp"},
                             headers={"Cache-Control": "no-store"})
 
+    @server.custom_route("/ready", methods=["GET"])
+    async def ready(_: Request) -> JSONResponse:
+        """Return 503 until database is reachable and schema is current."""
+        healthy = await run_in_threadpool(database_ready, vault.engine)
+        return JSONResponse(
+            {"status": "ready" if healthy else "unavailable"},
+            status_code=200 if healthy else 503,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @server.custom_route("/oauth/google/callback", methods=["GET"])
     async def google_callback(request: Request) -> JSONResponse:
+        """Public callback stages a link; ONLY an authenticated MCP tool can commit it.
+
+        OAuth state and authorization code arrive in URL query parameters.
+        Disable request access logs at all ingress layers.
+        """
+        headers = {
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'none'",
+        }
         if oauth is None:
-            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503)
-        state, code = request.query_params.get("state", ""), request.query_params.get("code", "")
+            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503, headers=headers)
         if request.query_params.get("error"):
-            return JSONResponse({"status": "DENIED_BY_PROVIDER"}, status_code=400,
-                                headers={"Cache-Control": "no-store"})
+            return JSONResponse({"status": "DENIED_BY_PROVIDER"}, status_code=400, headers=headers)
+        if len(request.query_params.getlist("state")) != 1 or len(request.query_params.getlist("code")) != 1:
+            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400, headers=headers)
+        state, code = request.query_params.get("state", ""), request.query_params.get("code", "")
         try:
-            response = await oauth.complete(state=state, code=code)
-            return JSONResponse(response, headers={"Cache-Control": "no-store",
-                                                  "Referrer-Policy": "no-referrer"})
+            pending = await oauth.complete(state=state, code=code)
+            return JSONResponse(pending, headers=headers)
         except (OAuthError, PermissionError, ValueError):
-            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400,
-                                headers={"Cache-Control": "no-store"})
+            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400, headers=headers)
 
     @server.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"])
     async def metadata(_: Request) -> JSONResponse:
@@ -127,11 +164,24 @@ def create_app(settings: Settings | None = None):
     host = urlsplit(cfg.mcp_resource).hostname
     if not host:
         raise ValueError("resource_hostname_required")
-    app = create_gateway(cfg).streamable_http_app(
+    # Production quotas share the same PostgreSQL ledger across HTTP and
+    # verified-user tool invocations. A separate SQLAlchemy pool handles HTTP
+    # admission while MCP provider storage owns its own pool.
+    quota = (
+        DistributedQuota(create_engine(cfg.database_url, pool_pre_ping=True),
+                         secret=cfg.audit_salt)
+        if cfg.deployment_environment == "production" else None
+    )
+    app = create_gateway(cfg, quota=quota).streamable_http_app(
         transport_security=TransportSecuritySettings(allowed_hosts=[host]),
         max_request_body_size=1_048_576,
     )
-    app.add_middleware(RateLimitMiddleware, requests_per_minute=120, max_clients=4096)
+    if quota is not None:
+        app.add_middleware(DistributedRateLimitMiddleware, quota=quota,
+                           requests_per_minute=120)
+    else:
+        app.add_middleware(RateLimitMiddleware, requests_per_minute=120,
+                           max_clients=4096)
     return app
 
 
@@ -139,7 +189,7 @@ def main() -> None:
     cfg = Settings.from_env()
     cfg.require_remote()
     uvicorn.run(create_app(cfg), host=cfg.bind_host, port=cfg.port,
-                proxy_headers=False, timeout_keep_alive=5)
+                proxy_headers=False, timeout_keep_alive=5, access_log=False)
 
 
 if __name__ == "__main__":
