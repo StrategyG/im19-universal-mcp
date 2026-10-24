@@ -31,6 +31,7 @@ dev = [
 im19-mcp = "im19_mcp.server:main"
 im19-gateway = "im19_mcp.gateway:main"
 im19-init-db = "im19_mcp.cli:main"
+im19-purge-expired = "im19_mcp.cli:purge_expired"
 
 [tool.setuptools.packages.find]
 where = ["src"]
