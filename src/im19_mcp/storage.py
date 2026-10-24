@@ -93,15 +93,16 @@ class Vault:
         return result
 
     def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
+        ciphertext = self.encrypt(token)
         with self.sessions.begin() as session:
             row = session.get(Credential, (subject, service))
             if row is None:
-                row = Credential(subject=subject, service=service, token_ciphertext="",
+                row = Credential(subject=subject, service=service, token_ciphertext=ciphertext,
                                  account_id=account_id, expires_at=expires)
                 session.add(row)
             if row.account_id != account_id:
                 raise PermissionError("account_rebind_requires_disconnect")
-            row.token_ciphertext = self.encrypt(token)
+            row.token_ciphertext = ciphertext
             row.expires_at = expires
 
     def get_credential(self, subject: str, service: str) -> tuple[str, dict, float] | None:
