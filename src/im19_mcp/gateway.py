@@ -76,7 +76,10 @@ class IntrospectionVerifier(TokenVerifier):
 def create_gateway(settings: Settings | None = None) -> MCPServer:
     cfg = settings or Settings.from_env()
     cfg.require_remote()
-    vault = Vault(cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt)
+    vault = Vault(
+        cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt,
+        previous_keys=cfg.vault_previous_keys,
+    )
     # Database schema must be created through an explicit migration/bootstrap step.
     oauth = GoogleOAuth(cfg, vault) if cfg.google_enabled() else None
     server = MCPServer(
