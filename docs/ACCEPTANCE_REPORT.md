@@ -6,7 +6,7 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
 ## Automated tests verified
 
 - Python 3.11: CI success.
-- Python 3.12: CI success; **55 tests passed** on commit `1216eb0` (Drive MCP integration).
+- Python 3.12: CI success; **66 tests passed** on commit `88d0e814` (OAuth confirmation, refresh locks and callback hardening).
 - Docker image: successfully built.
 - Ruff and mypy jobs: completed successfully.
 - Security workflow (Ruff, Bandit, pip-audit): successful, pip-audit:
@@ -15,10 +15,10 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
   after security workflow identified known issues in 47.0.0.
 
 Evidence:
-- [CI run 40121827610](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40121827610)
-- [Security run 40121827625](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40121827625)
-- Verified revision: `1216eb0ca9d6658498bd5ebefd4ce994cf011897`.
-  Documentation-only commits after this revision require their own CI checks.
+- [CI run 40123347652](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123347652)
+- [Security run 40123347646](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123347646)
+- Verified revision: `88d0e8141afa3301c55ddf5fa4570ef8283f71c9`.
+  Later documentation-only commits must be checked independently.
 
 ## Coverage by evidence type
 
@@ -30,6 +30,11 @@ Evidence:
 | OAuth URL with PKCE and incremental scopes | unit test | PASS |
 | OAuth callback state one-time, expiration and service binding | SQLite+unit test | PASS |
 | OAuth code exchange and refresh | mocked Google endpoint | PASS |
+| Callback stages encrypted credentials, never connects directly | mocked Google + SQLite tests | PASS |
+| Verified MCP confirmation, wrong-user and replay denial | MCP client + SQLite tests | PASS |
+| Concurrent refresh lease, stale-worker CAS and disconnect | SQLite tests | PASS |
+| Alembic migrations 0001–0003 | SQLite migration integration | PASS |
+| Callback anti-framing, no-store headers and duplicate state rejection | ASGI integration mock | PASS |
 | Encrypted credential storage / user isolation | SQLite+Fernet | PASS |
 | Read-only YouTube channel/uploads/Analytics | mocked official API paths | PASS |
 | Drive metadata search, folder list, metadata | mocked Google Drive API v3 | PASS |
@@ -49,8 +54,10 @@ Evidence:
 ## Unresolved production gates
 
 Requires real provider test accounts, a separate compliant MCP OAuth identity
-provider, public HTTPS deployment, distributed rate limiting, token rotation,
-staging pen test, restricted Drive scope consent/compliance, browser session
-binding, disconnect UX, write-approval persistence and recovery tests.
+provider, public HTTPS deployment, central ingress rate limiting, token rotation,
+staging pen test, restricted Drive scope consent/compliance, independently
+verified browser-session binding, disconnect UX, write-approval persistence
+and recovery tests. One-time confirmation code mitigates silent linking but is
+not equivalent to first-party login session binding.
 
 Do not label this system production-ready based on passing mock tests.
