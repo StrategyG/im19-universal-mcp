@@ -1,4 +1,4 @@
-# IM19 — Acceptance Test Report (Phase 1–4 + Phase 6 governance foundation)
+# IM19 — Acceptance Test Report (Phase 1–4, Phase 6 + offline key lifecycle)
 
 Last evaluated: 2026-10-24 UTC. **This is a test environment report, not
 production acceptance.** Evidence is linked to exact GitHub Actions runs.
@@ -6,8 +6,9 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
 ## Automated tests verified
 
 - Python 3.11: CI success.
-- Python 3.12: CI success; **93 tests passed, 2 integration tests skipped** on commit `a0ab5d99`.
-- PostgreSQL 16 service CI: **2 integration tests passed**, using disposable DB and real simultaneous transactions.
+- Python 3.12: CI success; **99 tests passed, 3 PostgreSQL-only tests skipped** on commit `faa3db9e`.
+- PostgreSQL 16 service CI: **3 integration tests passed**, including concurrent approval/idempotency and full sensitive-table Fernet key rotation.
+- Synthetic encrypted PostgreSQL 16 `pg_dump`/`pg_restore`: **PASS**, restored schema revision and a job-only credential decrypt verified. This is not a production DR drill.
 - Production configuration fail-closed tests, database readiness, audit and approval replay tests included.
 - Docker image: successfully built.
 - Ruff and mypy jobs: completed successfully.
@@ -17,11 +18,11 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
   after security workflow identified known issues in 47.0.0.
 
 Evidence:
-- [CI run 40125722114](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40125722114)
-- [Security run 40125722126](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40125722126)
-- [PostgreSQL integration run 40125722159](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40125722159)
-- Verified revision: `a0ab5d99b87f7b3916ec9295b3de766e47a5abb5`.
-  Later documentation-only commits must be checked independently.
+- [CI run 40127520385](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40127520385)
+- [Security run 40127520320](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40127520320)
+- [PostgreSQL integration run 40127520346](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40127520346)
+- Verified revision: `faa3db9eb01d9f9eec722d2f2aaef1264ba8734e`.
+  Subsequent CI-key-masking and documentation changes must pass their latest checks.
 
 ## Coverage by evidence type
 
@@ -41,6 +42,10 @@ Evidence:
 | Local stored-credential status makes no false live claim | in-process MCP mock | PASS |
 | Expired OAuth state / staged token retention purge | SQLite unit test | PASS |
 | Encrypted credential storage / user isolation | SQLite+Fernet | PASS |
+| Offline all-sensitive-field Fernet rotation / primary-only verification | SQLite and PostgreSQL integration | PASS |
+| Failed rotation rollback / key-retirement and log redaction tests | SQLite / CLI tests | PASS |
+| Production runtime denies legacy Fernet key fallback | config regression tests | PASS |
+| PostgreSQL backup/restore of synthetic encrypted data and schema | disposable GitHub Actions service | PASS (LIMITED SMOKE TEST) |
 | Read-only YouTube channel/uploads/Analytics | mocked official API paths | PASS |
 | Drive metadata search, folder list, metadata | mocked Google Drive API v3 | PASS |
 | Drive opt-in text access, MIME/size caps | mocked Drive API, scope separation | PASS |
@@ -66,8 +71,9 @@ Evidence:
 ## Unresolved production gates
 
 Requires real provider test accounts, a separate compliant MCP OAuth identity
-provider, public HTTPS deployment, central ingress rate limiting, token rotation,
-staging pen test, restricted Drive scope consent/compliance, independently
+provider, public HTTPS deployment, central ingress rate limiting, **managed KMS/HSM
+custody**, operator-verified offline rotation, real production backup/restore
+and RPO/RTO drills, staging pen test, restricted Drive scope consent/compliance, independently
 verified browser-session binding, disconnect UX, authenticated human approval issuance,
 external write-provider reconciliation and recovery tests. One-time confirmation code mitigates silent linking but is
 not equivalent to first-party login session binding.
