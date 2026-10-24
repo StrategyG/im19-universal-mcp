@@ -99,3 +99,30 @@ async def test_mcp_tools_never_accept_unverified_subject(monkeypatch):
             {"service": "drive", "confirmation_code": "one-time-code"},
         ))
         assert confirm["status"] == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_connection_status_does_not_claim_live_google_verification(monkeypatch, tmp_path):
+    from cryptography.fernet import Fernet
+    from im19_mcp.storage import Vault
+    import time
+
+    monkeypatch.setenv("IM19_DEV_SUBJECT", "mock-user-1")
+    vault = Vault(
+        "sqlite:///" + str(tmp_path / "connected.sqlite3"),
+        encryption_key=Fernet.generate_key().decode(), audit_salt="testing-salt",
+    )
+    vault.initialize_schema()
+    vault.put_credential(
+        "mock-user-1", "drive", "mock-google-account",
+        {"access_token": "private-mock-token", "scopes": ["drive.metadata.readonly"]},
+        time.time() + 3600,
+    )
+    server = MCPServer("IM19 connection status")
+    register_tools(server, settings=Settings.from_env(), vault=vault,
+                   oauth=FakeProviderOAuth(), allow_stdio_dev=True)
+    async with Client(server) as client:
+        response = payload(await client.call_tool("get_connection_status", {"service": "drive"}))
+        assert response["status"] == "CREDENTIAL_STORED_NOT_LIVE_VERIFIED"
+        assert response["provider_live_verified"] is False
+        assert "private-mock-token" not in json.dumps(response)
