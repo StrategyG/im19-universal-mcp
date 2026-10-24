@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -68,3 +71,27 @@ def test_colab_bootstrap_resolves_kernel_and_subprocess_module_paths():
     assert 'LOCAL_ENV["PYTHONPATH"] = str(REPO_SRC)' in migration
     assert 'sys.executable, "-m", "alembic", "upgrade", "head"' in migration
     assert "Sel runtime lokal belum dijalankan" in migration
+
+
+
+def test_colab_src_pythonpath_allows_import_from_outside_repo(tmp_path):
+    """Executable regression: Alembic/stdio child resolves IM19 from any cwd."""
+    source_dir = NOTEBOOK.parents[1] / "src"
+    assert (source_dir / "im19_mcp" / "readiness.py").is_file()
+    clean_env = {
+        key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LD_LIBRARY_PATH")
+        if key in os.environ
+    }
+    clean_env["PYTHONPATH"] = str(source_dir)
+    command = [
+        sys.executable, "-c",
+        "from im19_mcp.readiness import REQUIRED_SCHEMA_REVISION; "
+        "assert REQUIRED_SCHEMA_REVISION == '0005_distributed_quotas'; "
+        "print('IM19 subprocess import: PASS')",
+    ]
+    result = subprocess.run(
+        command, cwd=str(tmp_path), env=clean_env, capture_output=True,
+        text=True, timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "IM19 subprocess import: PASS" in result.stdout
