@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 
 import pytest
@@ -22,7 +23,10 @@ async def test_in_process_mcp_tool_discovery():
         assert REQUIRED.issubset(names)
         result = await client.call_tool("list_available_services", {})
         assert result.is_error is False
-        assert result.structured_content["live_connection_claimed"] is False
+        payload = result.structured_content
+        if payload is None:
+            payload = json.loads(result.content[0].text)
+        assert payload["live_connection_claimed"] is False
 
 
 @pytest.mark.asyncio
