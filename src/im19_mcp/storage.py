@@ -85,9 +85,12 @@ class Vault:
             if row is None:
                 raise PermissionError("oauth_state_unknown_or_reused")
             session.delete(row)
-            if row.expires_at <= time.time():
-                raise PermissionError("oauth_state_expired")
-            return row.subject, tuple(json.loads(row.scopes_json)), str(self.decrypt(row.verifier_ciphertext))
+            expired = row.expires_at <= time.time()
+            result = (row.subject, tuple(json.loads(row.scopes_json)),
+                      str(self.decrypt(row.verifier_ciphertext)))
+        if expired:
+            raise PermissionError("oauth_state_expired")
+        return result
 
     def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
         with self.sessions.begin() as session:
