@@ -88,6 +88,10 @@ class Settings:
         ):
             raise ValueError("duplicate_encryption_keys_forbidden")
         if self.deployment_environment == "production":
+            # This implementation requires an OFFLINE full rewrap. Production
+            # gateways run primary-only after the migration and validation.
+            if self.vault_previous_keys:
+                raise ValueError("production_legacy_key_fallback_forbidden")
             if not self.database_url.startswith("postgresql+psycopg://"):
                 raise ValueError("production_requires_postgresql")
             if self.dev_subject:
