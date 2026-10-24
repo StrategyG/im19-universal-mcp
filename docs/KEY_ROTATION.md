@@ -82,6 +82,9 @@ ciphertext columns, no mutation without an offline-ack flag, full transaction
 rollback on corrupted ciphertext, rejection of duplicate/invalid keys, absence
 of keys in CLI output, and primary-only decryption after migration.
 The disposable PostgreSQL 16 CI job additionally exercises rotation against
-a real database. No production credentials or sensitive live content are used.
+a real database, plus a separate `pg_dump`/`pg_restore` smoke test of a
+synthetic encrypted credential and schema revision. No production credentials
+or sensitive live content are used. Real production backup, offsite retention,
+and disaster-recovery acceptance remain mandatory.
 
 Reference: https://cryptography.io/en/latest/fernet/#multifernet
