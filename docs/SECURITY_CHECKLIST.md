@@ -27,7 +27,8 @@
 - [x] Production configuration refuses SQLite, weak audit salt and development subject identities.
 - [x] Database readiness endpoint denies readiness on unavailable/outdated schema.
 - [x] Database refresh locking with expiring owner leases (load testing still needed).
-- [ ] Complete backup, DR and pen-test exercises.
+- [x] Disposable PostgreSQL CI smoke test of encrypted synthetic pg_dump/pg_restore and schema readiness.
+- [ ] Production backup retention, PITR/restore drill, KMS historical key recovery, RPO/RTO acceptance, and external penetration test.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
 - [ ] Google restricted-scope verification/security assessment before public Drive content access.
 - [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).
