@@ -2,6 +2,9 @@
 
 - [x] Provider OAuth separate from MCP client OAuth.
 - [x] OAuth PKCE and atomic one-time, service-bound state with TTL.
+- [x] Google callback does not activate accounts until same MCP principal submits a one-time confirmation code.
+- [x] Confirmation code hashed at rest; staged OAuth tokens encrypted and expire.
+- [x] DB refresh lease and CAS guard prevent stale worker credential resurrection.
 - [x] Google API URL allowlist and read-only operations.
 - [x] Drive metadata-only default consent and explicit restricted content scope.
 - [x] Bounded Drive text response and file ID/query validation.
@@ -13,9 +16,11 @@
 - [ ] Rotate encryption keys via managed KMS.
 - [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
 - [ ] Human approval persistence, single-use semantics and idempotency.
-- [ ] Distributed rate limiting and refresh locking.
+- [ ] Distributed HTTP ingress rate limiting and identity-based quotas.
+- [x] Database refresh locking with expiring owner leases (load testing still needed).
 - [ ] Complete backup, DR and pen-test exercises.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
 - [ ] Google restricted-scope verification/security assessment before public Drive content access.
-- [ ] Browser session binding for Google OAuth initiation and callback.
+- [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).
+- [ ] Ingress reverse-proxy query log redaction for Google `code` and `state`.
 - [ ] Production audit retention and redaction review.
