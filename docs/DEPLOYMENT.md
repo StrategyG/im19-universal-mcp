@@ -1,6 +1,11 @@
-# Deployment (staging first)
+# IM19 deployment — controlled staging ONLY
 
-## Local development
+## 1. Local prerequisites
+
+Python 3.11+, official MCP SDK, current PostgreSQL, and a reverse proxy for
+HTTPS. Staging uses a **separate** MCP OAuth/OIDC issuer and Google OAuth app.
+GitHub Actions is CI, not a persistent hosting service.
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -9,40 +14,74 @@ python -m pytest -q
 im19-mcp
 ```
 
-Without IM19_DEV_SUBJECT, provider tools correctly return AUTH_REQUIRED.
+With no verified OAuth principal (and no deliberate `IM19_DEV_SUBJECT`),
+provider tools fail closed with `AUTH_REQUIRED`. Do NOT configure
+`IM19_DEV_SUBJECT` for a publicly accessible MCP process.
 
-## Database and secrets
+## 2. Database schema and secrets
 
-Use environment variables from .env.example; generate a Fernet key securely,
-and set a separately random audit salt. Do not commit .env.
+Provision a managed PostgreSQL database, application credentials with least
+privilege, an independent random `IM19_FERNET_KEY`, and random
+`IM19_AUDIT_SALT`. Do not commit real `.env` or persist credentials in build
+args, untrusted PR jobs or model-visible tool input.
 
 ```bash
+# With a trusted staging DB URL in IM19_DATABASE_URL:
 alembic upgrade head
+# Expected current revision: 0003_refresh_leases
 ```
 
-The im19-init-db command invokes metadata.create_all for local development
-only; for staging and production, use Alembic migrations.
+The migrations create state, pending-account confirmation and credential
+refresh lease tables. **Existing databases must run all unapplied migrations
+before upgrading the service**. `im19-init-db` is for local development only.
 
-## Docker
+## 3. Docker Compose test environment
 
 ```bash
-export POSTGRES_PASSWORD='choose-a-long-secret'
+# Configure .env from .env.example with secure, independently provisioned values.
+export POSTGRES_PASSWORD='set-a-unique-long-staging-secret'
 docker compose build
 docker compose up -d postgres
-# Apply migrations from a controlled environment with the production DB URL.
+docker compose run --rm gateway alembic upgrade head
 docker compose up -d gateway
 ```
 
-Terminate TLS at a trusted ingress, configure an explicit hostname allowlist
-and test token introspection, request Origin rules, and health checks before
-exposing the server to the internet. Docker Compose alone is not a finished
-production deployment.
+Migration files and Alembic are included in the runtime Docker image. Do
+not expose port 8000 to the public internet: it is loopback-bound on the host.
+Put an HTTPS reverse proxy in front and explicitly configure trusted host,
+Origin and query-string access log redaction.
 
-## Release gates
+The Google callback request contains OAuth `code` and `state` URL parameters.
+Uvicorn HTTP access logging is disabled in the bundled entrypoint, but
+**reverse proxies/CDNs/load balancers must also avoid logging query strings**
+for `/oauth/google/callback`.
 
-- Python matrix tests and Docker image build must pass.
-- No production credentials in untrusted pull requests or CI logs.
-- OAuth callback, refresh, revocation, cross-user isolation and 429 behavior
-  exercised in staging.
-- Backup/restore validated before handling real customer data.
-- Scope least privilege and app verification reviewed.
+## 4. OAuth & scope acceptance checklist
+
+1. Confirm independent MCP OAuth issuer, introspection, audience, expiry and
+   scope rejection behavior (invalid tokens must fail closed).
+2. Exercise `request_service_authorization` with a staging user.
+3. Complete Google's consent in a staging browser. Callback MUST return
+   `PENDING_CONFIRMATION`; no usable account may exist yet.
+4. Copy the browser's 5-minute one-time code to the authenticated MCP tool
+   `confirm_service_authorization`. A different user must not be able to
+   redeem it; replay must fail.
+5. Inspect `get_connection_status` and perform only supported read-only
+   provider calls. Verify YouTube and Drive consent separately.
+6. Trigger refresh concurrently across workers; verify the database lease
+   prevents overwrite after disconnect or reauthorization.
+7. Check `RATE_LIMITED` behavior, test restore procedures, scan egress paths,
+   and review all Google's restricted-scope requirements.
+
+## 5. Release gates (NOT YET MET)
+
+- Passing Python 3.11/3.12 CI, Docker build and dependency audit.
+- First-party OIDC **authenticated browser** portal with session-bound link
+  initiation and callback. The one-time code is only a safer interim fallback.
+- Live identity-provider integration, Google test-account connections,
+  end-to-end ChatGPT tool invocation, OAuth provider review where necessary.
+- Managed KMS / encryption key rotation, backup/restore drills, reliable
+  audit/log retention and central distributed ingress rate limiting.
+- Penetration test, incident response runbook and per-tenant access audit.
+
+No production deployment, provider login, or ChatGPT connection is claimed.
