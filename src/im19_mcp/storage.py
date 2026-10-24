@@ -13,8 +13,8 @@ import time
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, create_engine, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy import Float, Integer, String, Text, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 class Base(DeclarativeBase):
