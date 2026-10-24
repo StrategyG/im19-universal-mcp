@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
