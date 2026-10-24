@@ -25,6 +25,7 @@ def purge_expired() -> None:
         raise SystemExit("IM19_FERNET_KEY is required")
     store = Vault(
         cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt,
+        previous_keys=cfg.vault_previous_keys,
     )
     # Never output subjects, codes, OAuth tokens or ciphertext.
     expired = store.purge_expired()
