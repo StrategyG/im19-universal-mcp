@@ -1,4 +1,4 @@
-# IM19 — Architecture Design Document (Phase 1–3)
+# IM19 — Architecture Design Document (Phase 1–4 + OAuth hardening)
 
 ## Mission
 A single provider-neutral MCP integration gateway, not a substitute for the
@@ -15,7 +15,10 @@ ChatGPT (OAuth client)
 IM19 Remote MCP (MCP resource server /mcp, issuer + aud + scopes verified)
    |   verified subject only; never user_id from tool args
    +-- MCP tool registry
-   +-- OAuth state/credential store -- encrypted Fernet -> PostgreSQL
+   +-- one-time OAuth state + encrypted pending link claim -> PostgreSQL
+   |    +-- browser displays confirmation code -> authenticated MCP user confirms
+   +-- encrypted provider credential vault -> PostgreSQL
+   +-- DB refresh leases with stale-worker ownership checks
    +-- audit store (pseudonymous subject, action, timestamp, status)
    +-- Google OAuth flow --> Google consent + token + userinfo
    +-- YouTube read-only connector --> official YouTube Data/Analytics APIs
@@ -31,11 +34,11 @@ MCP authorization issuer.
 - config.py — typed runtime configuration, mandatory security configuration for remote mode.
 - registry.py — declared, separate service capabilities; not a connection claim.
 - security.py — deny-by-default scoped user/provider/account checks and exact approval policy.
-- storage.py — SQLAlchemy tables, Fernet-encrypted provider credential documents, one-use state.
-- google_oauth.py — Google Authorization Code + PKCE, callback exchange, refresh and revocation.
+- storage.py — SQLAlchemy tables, Fernet-encrypted provider credentials, encrypted pending confirmations, one-use state and refresh leases.
+- google_oauth.py — Google Authorization Code + PKCE, callback stages encrypted tokens, explicit verified-subject confirmation, cross-worker refresh and revocation primitives.
 - youtube.py — fixed-host, read-only official Google APIs, sanitized provider error classes.
 - drive.py — metadata search, folder listing and bounded opt-in text reads from fixed Drive v3 endpoints.
-- server.py — tool discovery, service authorization URL, status, protected YouTube tools.
+- server.py — tool discovery, consent URL, verified-user confirmation, status, protected YouTube/Drive tools.
 - gateway.py — OAuth bearer introspection for remote HTTP; public health and OAuth callback only.
 
 ## Operational boundaries
@@ -44,14 +47,16 @@ MCP authorization issuer.
 - Remote mode refuses startup without issuer/resource/introspection secrets and token vault key.
 - Remote mode does not honor the stdio development subject.
 - OAuth callback is public but state is random, service-bound, time-bound, server-stored
-  and atomically single-use. Binding to an independently authenticated browser session
-  remains a production requirement; a random state is not a substitute for it.
+  and atomically single-use. Browser callback stages encrypted credentials but cannot
+  connect an account: the same authenticated MCP principal must explicitly redeem a
+  short-lived confirmation code. Independent browser-session binding is still
+  required for a production account portal.
 - Exposing /mcp to ChatGPT requires an independent OAuth provider capable of MCP resource binding.
 - No provider writes, email sends, uploads, deletes or repository changes are exposed.
 
 ## Deferred architectural controls
 
-Before production: Redis/DB coordination of refresh jobs; key rotation; full
+Before production: long-running refresh lease load testing; key rotation; full
 provider webhook integration; post-disconnect revocation status tracking;
 OIDC session binding and account-selection UX; deployment monitoring and
 alerts; retention/privacy policy; managed KMS/HSM; stronger app gateway rate
