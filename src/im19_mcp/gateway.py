@@ -96,19 +96,31 @@ def create_gateway(settings: Settings | None = None) -> MCPServer:
 
     @server.custom_route("/oauth/google/callback", methods=["GET"])
     async def google_callback(request: Request) -> JSONResponse:
+        """Public callback stages a link; ONLY an authenticated MCP tool can commit it.
+
+        OAuth state and authorization code arrive in URL query parameters.
+        Disable request access logs at all ingress layers.
+        """
+        headers = {
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; form-action 'none'",
+        }
         if oauth is None:
-            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503)
-        state, code = request.query_params.get("state", ""), request.query_params.get("code", "")
+            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503, headers=headers)
         if request.query_params.get("error"):
-            return JSONResponse({"status": "DENIED_BY_PROVIDER"}, status_code=400,
-                                headers={"Cache-Control": "no-store"})
+            return JSONResponse({"status": "DENIED_BY_PROVIDER"}, status_code=400, headers=headers)
+        if len(request.query_params.getlist("state")) != 1 or len(request.query_params.getlist("code")) != 1:
+            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400, headers=headers)
+        state, code = request.query_params.get("state", ""), request.query_params.get("code", "")
         try:
-            response = await oauth.complete(state=state, code=code)
-            return JSONResponse(response, headers={"Cache-Control": "no-store",
-                                                  "Referrer-Policy": "no-referrer"})
+            pending = await oauth.complete(state=state, code=code)
+            return JSONResponse(pending, headers=headers)
         except (OAuthError, PermissionError, ValueError):
-            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400,
-                                headers={"Cache-Control": "no-store"})
+            return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400, headers=headers)
 
     @server.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"])
     async def metadata(_: Request) -> JSONResponse:
@@ -139,7 +151,7 @@ def main() -> None:
     cfg = Settings.from_env()
     cfg.require_remote()
     uvicorn.run(create_app(cfg), host=cfg.bind_host, port=cfg.port,
-                proxy_headers=False, timeout_keep_alive=5)
+                proxy_headers=False, timeout_keep_alive=5, access_log=False)
 
 
 if __name__ == "__main__":
