@@ -154,3 +154,36 @@ async def test_readiness_503_without_db_schema_and_200_after_revision(cfg, tmp_p
         ready = await client.get("/ready")
         assert ready.status_code == 200
         assert ready.json() == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_production_gateway_uses_shared_quota_and_fails_closed_without_database(cfg):
+    from cryptography.fernet import Fernet
+    from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddleware
+
+    # Intentionally unreachable PostgreSQL endpoint. Neither a real account
+    # nor a live third-party provider is involved in this configuration test.
+    production = replace(
+        cfg, deployment_environment="production",
+        database_url="postgresql+psycopg://im19:test@127.0.0.1:65531/none",
+        dev_subject="", audit_salt="strong-test-audit-salt-" + ("z" * 40),
+        vault_key=Fernet.generate_key().decode(),
+    )
+    app = create_app(production)
+    assert any(
+        middleware.cls is DistributedRateLimitMiddleware
+        for middleware in app.user_middleware
+    )
+    assert not any(
+        middleware.cls is RateLimitMiddleware
+        for middleware in app.user_middleware
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("192.0.2.3", 1234)),
+        base_url="https://mcp.test",
+    ) as client:
+        # Availability of the HTTP process is not permission to use MCP.
+        assert (await client.get("/health")).status_code == 200
+        failed = await client.get("/mcp")
+        assert failed.status_code == 503
+        assert failed.json() == {"error": "QUOTA_UNAVAILABLE"}
