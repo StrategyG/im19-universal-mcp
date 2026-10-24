@@ -21,6 +21,10 @@ async def test_in_process_mcp_tool_discovery():
     async with Client(create_stdio_server()) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
         assert REQUIRED.issubset(names)
+        assert any(str(resource.uri) == "im19://capabilities"
+                   for resource in (await client.list_resources()).resources)
+        assert any(prompt.name == "im19_security_review"
+                   for prompt in (await client.list_prompts()).prompts)
         result = await client.call_tool("list_available_services", {})
         assert result.is_error is False
         payload = result.structured_content
