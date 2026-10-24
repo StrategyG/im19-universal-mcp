@@ -46,8 +46,12 @@ jobs:
           python - <<'PY'
           import os
           from cryptography.fernet import Fernet
+          key = Fernet.generate_key().decode()
+          # Mask the ephemeral test key before subsequent steps expose env.
+          # The key is synthetic CI-only material, never a real production key.
+          print("::add-mask::" + key)
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-              f.write("IM19_INTEGRATION_FERNET_KEY=" + Fernet.generate_key().decode() + "\n")
+              f.write("IM19_INTEGRATION_FERNET_KEY=" + key + "\n")
           PY
       - name: Run Alembic migrations on real PostgreSQL
         run: |
