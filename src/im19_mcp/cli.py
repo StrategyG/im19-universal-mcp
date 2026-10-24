@@ -9,8 +9,10 @@ def main() -> None:
     cfg = Settings.from_env()
     if not cfg.vault_key:
         raise SystemExit("IM19_FERNET_KEY is required")
-    Vault(cfg.database_url, encryption_key=cfg.vault_key,
-          audit_salt=cfg.audit_salt).initialize_schema()
+    Vault(
+        cfg.database_url, encryption_key=cfg.vault_key,
+        audit_salt=cfg.audit_salt, previous_keys=cfg.vault_previous_keys,
+    ).initialize_schema()
     print("IM19 local schema initialized; use migrations for production.")
 
 
