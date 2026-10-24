@@ -16,6 +16,6 @@ def test_schema_revision_must_be_exact(tmp_path):
         conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0003_refresh_leases')"))
     assert database_ready(engine) is False
     with engine.begin() as conn:
-        conn.execute(text("UPDATE alembic_version SET version_num='0004_governance'"))
+        conn.execute(text("UPDATE alembic_version SET version_num='0005_distributed_quotas'"))
     assert database_ready(engine) is True
     assert database_ready(engine, "unexpected-version") is False

@@ -32,11 +32,12 @@ args, untrusted PR jobs or model-visible tool input.
 ```bash
 # With a trusted staging DB URL in IM19_DATABASE_URL:
 alembic upgrade head
-# Expected current revision: 0004_governance
+# Expected current revision: 0005_distributed_quotas
 ```
 
 The migrations create state, pending-account confirmation, credential refresh
-lease, one-time governance approval, and mutation idempotency receipt tables. **Existing databases must run all unapplied migrations
+lease, one-time governance approval, mutation idempotency receipt and distributed
+rate-window tables. **Existing databases must run all unapplied migrations
 before upgrading the service**. `im19-init-db` is for local development only.
 
 ## 3. Docker Compose test environment
@@ -55,7 +56,7 @@ not expose port 8000 to the public internet: it is loopback-bound on the host.
 Put an HTTPS reverse proxy in front and explicitly configure trusted host,
 Origin and query-string access log redaction. Use `/health` for process liveness;
 use `/ready` to check live DB connectivity and Alembic revision
-`0004_governance`. A 503 response must prevent instance registration.
+`0005_distributed_quotas`. A 503 response must prevent instance registration.
 
 Remote gateway config defaults to strict `production` validation even if
 `IM19_DEPLOYMENT_ENV` is omitted. For development only, explicitly set
@@ -82,7 +83,11 @@ for `/oauth/google/callback`.
    provider calls. Verify YouTube and Drive consent separately.
 6. Trigger refresh concurrently across workers; verify the database lease
    prevents overwrite after disconnect or reauthorization.
-7. Check `RATE_LIMITED` behavior, test restore procedures, scan egress paths,
+7. Verify distributed `RATE_LIMITED` behavior under multiple PostgreSQL-backed
+   workers. The gateway uses only the immediate socket peer, so put independent
+   **end-client** rate limits at trusted HTTPS ingress and never trust raw
+   X-Forwarded-For headers. Confirm that quota-DB outage returns 503 instead
+   of silently allowing calls. Test restore procedures, scan egress paths,
    and review all Google's restricted-scope requirements.
 
 ## 5. OAuth retention operations
@@ -94,8 +99,8 @@ im19-purge-expired
 # Or with the container: docker compose run --rm gateway im19-purge-expired
 ```
 
-It only returns deletion counts. Expired staged Google credentials, OAuth
-states and unused governance approvals otherwise remain in the database after their logical TTL;
+It only returns deletion counts. Expired staged Google credentials, OAuth,
+unused governance approvals and shared quota rows otherwise remain in the database after logical TTL;
 logical expiry alone is not a retention policy. A production scheduler, job
 monitoring and operational alarm must be configured separately.
 
@@ -111,8 +116,8 @@ monitoring and operational alarm must be configured separately.
 - Manual offline Fernet re-encryption is implemented; managed KMS/HSM custody,
   verified backup/restore drills and independent key rotation controls remain
   release gates.
-- Managed monitoring and alerting, reliable
-  audit/log retention and central distributed ingress rate limiting.
+- Managed monitoring and alerting, reliable audit/log retention, per-client
+  quotas at ingress/WAF, strict reverse-proxy identity validation and load testing.
 - Penetration test, incident response runbook and per-tenant access audit.
 
 Use `python -m pytest -q` for unit/mock tests. In CI, the separate

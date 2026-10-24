@@ -7,7 +7,7 @@ from __future__ import annotations
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-REQUIRED_SCHEMA_REVISION = "0004_governance"
+REQUIRED_SCHEMA_REVISION = "0005_distributed_quotas"
 
 
 def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVISION) -> bool:
