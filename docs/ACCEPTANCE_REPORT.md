@@ -6,7 +6,7 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
 ## Automated tests verified
 
 - Python 3.11: CI success.
-- Python 3.12: CI success; **66 tests passed** on commit `88d0e814` (OAuth confirmation, refresh locks and callback hardening).
+- Python 3.12: CI success; **68 tests passed** on commit `3b600c12` (OAuth confirmation, refresh locks, retention cleanup and callback hardening).
 - Docker image: successfully built.
 - Ruff and mypy jobs: completed successfully.
 - Security workflow (Ruff, Bandit, pip-audit): successful, pip-audit:
@@ -15,9 +15,9 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
   after security workflow identified known issues in 47.0.0.
 
 Evidence:
-- [CI run 40123347652](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123347652)
-- [Security run 40123347646](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123347646)
-- Verified revision: `88d0e8141afa3301c55ddf5fa4570ef8283f71c9`.
+- [CI run 40123602439](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123602439)
+- [Security run 40123602436](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40123602436)
+- Verified revision: `3b600c1228c44c06e557f75ec5a8432885eb4646`.
   Later documentation-only commits must be checked independently.
 
 ## Coverage by evidence type
@@ -35,6 +35,8 @@ Evidence:
 | Concurrent refresh lease, stale-worker CAS and disconnect | SQLite tests | PASS |
 | Alembic migrations 0001–0003 | SQLite migration integration | PASS |
 | Callback anti-framing, no-store headers and duplicate state rejection | ASGI integration mock | PASS |
+| Local stored-credential status makes no false live claim | in-process MCP mock | PASS |
+| Expired OAuth state / staged token retention purge | SQLite unit test | PASS |
 | Encrypted credential storage / user isolation | SQLite+Fernet | PASS |
 | Read-only YouTube channel/uploads/Analytics | mocked official API paths | PASS |
 | Drive metadata search, folder list, metadata | mocked Google Drive API v3 | PASS |
