@@ -65,10 +65,19 @@ async def test_mocked_callback_refresh_and_replay(cfg, vault):
         auth = GoogleOAuth(cfg, vault, http_client=client)
         state = parse_qs(urlsplit(auth.begin("subject1")["authorization_url"]).query)["state"][0]
         result = await auth.complete(state=state, code="test-code")
-        assert result["status"] == "CONNECTED"
+        assert result["status"] == "PENDING_CONFIRMATION"
         assert result["account_id"] == "google-account-1"
+        assert vault.get_credential("subject1", "youtube") is None
         with pytest.raises(PermissionError):
             await auth.complete(state=state, code="test-code")
+        # Replayed or cross-user confirmation cannot silently bind a Google account.
+        with pytest.raises(OAuthError, match="confirmation_invalid_or_expired"):
+            auth.confirm("other-subject", "youtube", result["confirmation_code"])
+        assert vault.get_credential("subject1", "youtube") is None
+        confirmed = auth.confirm("subject1", "youtube", result["confirmation_code"])
+        assert confirmed["status"] == "CONNECTED"
+        with pytest.raises(OAuthError, match="confirmation_invalid_or_expired"):
+            auth.confirm("subject1", "youtube", result["confirmation_code"])
         account, access = await auth.access_token(
             "subject1", {"https://www.googleapis.com/auth/youtube.readonly"})
         assert account == "google-account-1" and access == "mock-access"
@@ -136,8 +145,11 @@ async def test_google_drive_oauth_stored_in_independent_service_vault(cfg, vault
         ).query)["state"][0]
         data = await oauth.complete(state=state, code="mock-code")
         assert data["service"] == "drive"
+        assert data["status"] == "PENDING_CONFIRMATION"
         assert vault.get_credential("user1", "youtube") is None
         assert vault.get_credential("user2", "drive") is None
+        assert vault.get_credential("user1", "drive") is None
+        assert oauth.confirm("user1", "drive", data["confirmation_code"])["status"] == "CONNECTED"
         assert vault.get_credential("user1", "drive")[1]["access_token"] == "drive-mock-access"
         with pytest.raises(OAuthError, match="SCOPE_REQUIRED"):
             await oauth.access_token(
