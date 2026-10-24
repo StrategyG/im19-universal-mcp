@@ -138,3 +138,57 @@ def test_postgres_atomic_offline_key_rotation_covers_all_sensitive_tables():
     )
     with pytest.raises(InvalidToken):
         old.get_credential(suffix, "drive")
+
+
+def test_postgres_shared_quota_across_parallel_gateway_workers():
+    """Atomic shared limit holds on PostgreSQL 16 under concurrent requests."""
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota, RateWindow
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    # Simulate distinct gateway instances with separate connection pools.
+    replicas = [
+        DistributedQuota(create_engine(url, pool_pre_ping=True), secret="ci-rate-salt-123456")
+        for _ in range(4)
+    ]
+    identity = secrets.token_hex(16)
+    now = 1_610_000_001
+    limit = 10
+
+    def request(i: int) -> bool:
+        return replicas[i % len(replicas)].consume(
+            "http:peer", identity, limit=limit, now=now
+        )[0]
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(request, range(40)))
+    assert sum(outcomes) == limit
+    digest = replicas[0]._digest("http:peer", identity, 60)
+    with replicas[0].sessions() as session:
+        records = session.execute(select(RateWindow).where(
+            RateWindow.key_digest == digest,
+        )).scalars().all()
+        assert len(records) == 1
+        assert records[0].hits == limit
+        assert identity not in records[0].key_digest
+    for replica in replicas:
+        replica.engine.dispose()
+
+
+def test_postgres_shared_quota_subject_isolation_and_retention():
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    limiter = DistributedQuota(create_engine(url), secret="ci-rate-salt-123456")
+    try:
+        subject = secrets.token_hex(16)
+        now = 1_700_000_000
+        assert limiter.consume("mcp:provider-reads", subject, limit=1, now=now)[0]
+        assert not limiter.consume("mcp:provider-reads", subject, limit=1, now=now)[0]
+        assert limiter.consume("mcp:oauth-begin", subject, limit=1, now=now)[0]
+        assert limiter.consume("mcp:provider-reads", subject + "-2", limit=1, now=now)[0]
+        # A shared ledger maintenance job can remove expired windows safely.
+        assert limiter.purge_expired(now=now + 100_000) >= 3
+    finally:
+        limiter.engine.dispose()
