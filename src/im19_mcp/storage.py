@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet
-from sqlalchemy import Float, Integer, String, Text, create_engine, delete
+from sqlalchemy import Float, Integer, String, Text, create_engine, delete, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -37,6 +37,8 @@ class Credential(Base):
     token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     account_id: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    refresh_owner: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    refresh_until: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
 
 
 class PendingLink(Base):
@@ -187,6 +189,79 @@ class Vault:
                 raise PermissionError("account_rebind_requires_disconnect")
             row.token_ciphertext = ciphertext
             row.expires_at = expires
+            # A newly confirmed authorization invalidates any stale refresh worker.
+            row.refresh_owner = ""
+            row.refresh_until = 0.0
+
+    def acquire_refresh_lease(
+        self, subject: str, service: str, owner: str, *,
+        now: float, lease_seconds: int = 30
+    ) -> tuple[str, dict, float] | None:
+        """Lease a specific account's refresh across workers using SQL UPDATE.
+
+        Leases use DB time parameters and atomically compare expiration. The
+        provider request takes place *outside* the transaction. Replaced or
+        revoked credentials cannot be resurrected by stale workers.
+        """
+        if not owner or not 10 <= lease_seconds <= 120:
+            raise ValueError("refresh_lease_invalid")
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.refresh_until <= now,
+            )
+            .values(refresh_owner=owner, refresh_until=now + lease_seconds)
+            .returning(Credential.account_id, Credential.token_ciphertext,
+                       Credential.expires_at)
+        )
+        with self.sessions.begin() as session:
+            row = session.execute(stmt).one_or_none()
+        if row is None:
+            return None
+        data = self.decrypt(row.token_ciphertext)
+        if not isinstance(data, dict):
+            raise ValueError("token_data_invalid")
+        return row.account_id, data, row.expires_at
+
+    def complete_refresh(
+        self, subject: str, service: str, owner: str, account_id: str,
+        token: dict, expires: float
+    ) -> bool:
+        """Only the still-current lease owner may persist replacement tokens."""
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.account_id == account_id,
+                Credential.refresh_owner == owner,
+            )
+            .values(
+                token_ciphertext=self.encrypt(token),
+                expires_at=expires,
+                refresh_owner="",
+                refresh_until=0.0,
+            )
+        )
+        with self.sessions.begin() as session:
+            result = session.execute(stmt)
+            return bool(result.rowcount)
+
+    def release_refresh_lease(self, subject: str, service: str, owner: str) -> None:
+        """Release only the caller's current lease, never another worker's."""
+        stmt = (
+            update(Credential)
+            .where(
+                Credential.subject == subject,
+                Credential.service == service,
+                Credential.refresh_owner == owner,
+            )
+            .values(refresh_owner="", refresh_until=0.0)
+        )
+        with self.sessions.begin() as session:
+            session.execute(stmt)
 
     def get_credential(self, subject: str, service: str) -> tuple[str, dict, float] | None:
         with self.sessions() as session:
