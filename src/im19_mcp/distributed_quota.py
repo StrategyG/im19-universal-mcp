@@ -16,7 +16,7 @@ import hmac
 import time
 from typing import Final
 
-from sqlalchemy import Engine, Integer, String, delete, text
+from sqlalchemy import BigInteger, Engine, Integer, String, delete, text
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 
 from im19_mcp.storage import Base
@@ -42,9 +42,9 @@ class RateWindow(Base):
     __tablename__ = "distributed_rate_windows"
 
     key_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
-    bucket_start: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bucket_start: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     hits: Mapped[int] = mapped_column(Integer, nullable=False)
-    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class QuotaUnavailable(RuntimeError):
