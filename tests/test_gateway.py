@@ -61,3 +61,43 @@ def test_create_app_requires_valid_issuer_settings(cfg):
     # create_app performs security validation prior to binding ports.
     with pytest.raises(ValueError):
         create_app(replace(cfg, mcp_client_secret=""))
+
+
+@pytest.mark.asyncio
+async def test_google_callback_only_stages_secret_and_protects_browser_response(cfg):
+    from cryptography.fernet import Fernet
+    from unittest.mock import AsyncMock
+
+    from im19_mcp.google_oauth import GoogleOAuth
+
+    configured = replace(
+        cfg, vault_key=Fernet.generate_key().decode(),
+        google_client_id="unit-test-google-client", google_client_secret="mock-secret",
+        google_redirect_uri="https://mcp.test/oauth/google/callback",
+    )
+    with patch.object(GoogleOAuth, "complete", new_callable=AsyncMock) as complete:
+        complete.return_value = {
+            "status": "PENDING_CONFIRMATION",
+            "confirmation_code": "unit-test-only-not-real",
+        }
+        app = create_app(configured)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://mcp.test",
+        ) as client:
+            response = await client.get(
+                "/oauth/google/callback", params={"state": "some-state", "code": "mock-code"},
+            )
+            assert response.status_code == 200
+            assert response.json()["status"] == "PENDING_CONFIRMATION"
+            assert response.headers["Cache-Control"] == "no-store, private"
+            assert response.headers["Referrer-Policy"] == "no-referrer"
+            assert response.headers["X-Frame-Options"] == "DENY"
+            assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+            complete.assert_awaited_once_with(state="some-state", code="mock-code")
+
+            dup = await client.get(
+                "/oauth/google/callback?state=first&state=second&code=mock-code",
+            )
+            assert dup.status_code == 400
+            assert dup.json()["status"] == "OAUTH_FAILED"
+            assert complete.await_count == 1
