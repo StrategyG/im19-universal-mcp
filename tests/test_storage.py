@@ -16,7 +16,7 @@ def vault(tmp_path):
 
 def test_oauth_state_one_time(vault):
     vault.create_state("secret-state", "user1", ("openid",), "pkce-secret", time.time() + 30)
-    assert vault.consume_state("secret-state") == ("user1", ("openid",), "pkce-secret")
+    assert vault.consume_state("secret-state") == ("user1", "youtube", ("openid",), "pkce-secret")
     with pytest.raises(PermissionError):
         vault.consume_state("secret-state")
 
@@ -59,3 +59,19 @@ def test_audit_does_not_store_identity_or_secrets(vault):
     assert row[0] != "very_private_subject"
     assert len(row[0]) == 64
     assert row[1:] == ("youtube", "read_channel")
+
+
+def test_oauth_state_bound_to_exact_service(vault):
+    vault.create_state("state-drive", "user1", ("openid", "drive.metadata"), "challenge", time.time() + 30,
+                       service="drive")
+    assert vault.consume_state("state-drive") == (
+        "user1", "drive", ("openid", "drive.metadata"), "challenge")
+    with pytest.raises(PermissionError):
+        vault.consume_state("state-drive")
+
+
+def test_expired_oauth_state_stays_consumed(vault):
+    vault.create_state("already-expired", "user1", (), "challenge", time.time() - 5, service="drive")
+    for _ in range(2):
+        with pytest.raises(PermissionError):
+            vault.consume_state("already-expired")
