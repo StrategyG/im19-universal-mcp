@@ -25,6 +25,12 @@ class FakeProviderOAuth:
         return {"status": "AUTH_REQUIRED", "service": service,
                 "authorization_url": "https://accounts.google.com/consent"}
 
+    def confirm(self, subject, service, confirmation_code):
+        self.calls.append(("confirm", subject, service, confirmation_code))
+        if subject != "mock-user-1" or service != "drive" or confirmation_code != "one-time-code":
+            raise OAuthError("confirmation_invalid_or_expired")
+        return {"status": "CONNECTED", "service": "drive", "account_id": "mock-account"}
+
     async def access_token(self, subject, scopes, *, service="youtube"):
         self.calls.append((subject, service, tuple(sorted(scopes))))
         if service != "drive":
@@ -63,6 +69,17 @@ async def test_mcp_drive_scope_policy_and_service_isolation(monkeypatch):
             "request_service_authorization", {"service": "drive", "include_content": False}))
         assert url["status"] == "AUTH_REQUIRED"
         assert oauth.calls[-1] == ("mock-user-1", "drive", False, False)
+        confirmed = payload(await client.call_tool(
+            "confirm_service_authorization",
+            {"service": "drive", "confirmation_code": "one-time-code"},
+        ))
+        assert confirmed["status"] == "CONNECTED"
+        assert oauth.calls[-1] == ("confirm", "mock-user-1", "drive", "one-time-code")
+        rejected = payload(await client.call_tool(
+            "confirm_service_authorization",
+            {"service": "drive", "confirmation_code": "wrong-code"},
+        ))
+        assert rejected["status"] == "DENY"
 
 
 @pytest.mark.asyncio
@@ -77,3 +94,8 @@ async def test_mcp_tools_never_accept_unverified_subject(monkeypatch):
         result = payload(await client.call_tool(
             "get_connection_status", {"service": "drive"}))
         assert result["status"] == "AUTH_REQUIRED"
+        confirm = payload(await client.call_tool(
+            "confirm_service_authorization",
+            {"service": "drive", "confirmation_code": "one-time-code"},
+        ))
+        assert confirm["status"] == "AUTH_REQUIRED"
