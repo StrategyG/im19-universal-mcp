@@ -192,3 +192,23 @@ def test_postgres_shared_quota_subject_isolation_and_retention():
         assert limiter.purge_expired(now=now + 100_000) >= 3
     finally:
         limiter.engine.dispose()
+
+
+def test_postgres_quota_accepts_64bit_expiration_after_2038():
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota, RateWindow
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    quota = DistributedQuota(create_engine(url), secret="ci-rate-salt-123456")
+    try:
+        subject = secrets.token_hex(16)
+        year_2046 = 2_400_000_000
+        assert quota.consume("http:peer", subject, limit=1, now=year_2046)[0]
+        digest = quota._digest("http:peer", subject, 60)
+        with quota.sessions() as session:
+            row = session.execute(
+                select(RateWindow).where(RateWindow.key_digest == digest)
+            ).scalar_one()
+            assert row.expires_at > 2**31 - 1
+    finally:
+        quota.engine.dispose()
