@@ -77,6 +77,10 @@ class Vault:
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize_schema(self) -> None:
+        # Import optional governance models before local-dev create_all.
+        # Production schema changes still require explicit Alembic migrations.
+        from im19_mcp.governance import approvals  # noqa: F401
+
         Base.metadata.create_all(self.engine)
 
     def encrypt(self, value: object) -> str:
