@@ -39,6 +39,21 @@ class Credential(Base):
     expires_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+class PendingLink(Base):
+    """Provider credential staged for explicit authenticated MCP confirmation.
+
+    This table never contains raw confirmation codes or plaintext OAuth tokens.
+    """
+    __tablename__ = "oauth_pending_links"
+    confirmation_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    service: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    token_expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -111,6 +126,54 @@ class Vault:
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise PermissionError("oauth_state_scope_invalid")
         return row.subject, binding["service"], tuple(scopes), str(self.decrypt(row.verifier_ciphertext))
+
+    def stage_link(
+        self, subject: str, service: str, account_id: str,
+        token: dict, token_expires_at: float, *, ttl_seconds: int = 300
+    ) -> str:
+        """Encrypt provider data; return a short-lived code shown in browser only."""
+        if not subject or service not in {"youtube", "drive"} or not account_id:
+            raise ValueError("invalid_pending_link")
+        if not 30 <= ttl_seconds <= 600 or token_expires_at <= time.time():
+            raise ValueError("invalid_link_expiration")
+        code = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(code.encode("ascii")).hexdigest()
+        with self.sessions.begin() as session:
+            session.add(PendingLink(
+                confirmation_hash=digest, subject=subject, service=service,
+                account_id=account_id, token_ciphertext=self.encrypt(token),
+                token_expires_at=token_expires_at,
+                expires_at=time.time() + ttl_seconds,
+            ))
+        return code
+
+    def confirm_link(self, subject: str, service: str, confirmation_code: str) -> tuple[str, dict, float]:
+        """Consume exact user's one-time claim and return staged encrypted credentials.
+
+        A wrong-user attempt does NOT invalidate another user's claim.
+        Atomic DELETE RETURNING prevents any claim from being confirmed twice.
+        """
+        if (not isinstance(confirmation_code, str) or
+                not 20 <= len(confirmation_code) <= 256 or
+                not subject or service not in {"youtube", "drive"}):
+            raise PermissionError("confirmation_invalid_or_expired")
+        digest = hashlib.sha256(confirmation_code.encode("utf-8")).hexdigest()
+        stmt = (
+            delete(PendingLink)
+            .where(PendingLink.confirmation_hash == digest,
+                   PendingLink.subject == subject,
+                   PendingLink.service == service)
+            .returning(PendingLink.account_id, PendingLink.token_ciphertext,
+                       PendingLink.token_expires_at, PendingLink.expires_at)
+        )
+        with self.sessions.begin() as session:
+            row = session.execute(stmt).one_or_none()
+        if row is None or row.expires_at <= time.time() or row.token_expires_at <= time.time():
+            raise PermissionError("confirmation_invalid_or_expired")
+        data = self.decrypt(row.token_ciphertext)
+        if not isinstance(data, dict):
+            raise PermissionError("confirmation_invalid_or_expired")
+        return row.account_id, data, row.token_expires_at
 
     def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
         ciphertext = self.encrypt(token)
