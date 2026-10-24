@@ -1,6 +1,6 @@
 # IM19 Universal MCP — Intelligent Mind 19
 
-**Status:** active implementation of Phase 1 (MCP core), Phase 2 (Google OAuth backend), and Phase 3 (read-only YouTube). This project is **not deployed** and no live Google, YouTube or ChatGPT connection has been verified.
+**Status:** development implementation of Phase 1 (MCP core), Phase 2 (Google OAuth backend), Phase 3 (YouTube read-only), and Phase 4 (Google Drive read-only). This project is **not deployed** and no live Google, YouTube or ChatGPT connection has been verified.
 
 ## Architecture
 
@@ -11,6 +11,7 @@ ChatGPT (remote OAuth MCP client)
       -> encrypted OAuth vault (PostgreSQL/SQLAlchemy)
       -> Google OAuth Authorization Code + PKCE
       -> official YouTube Data v3 / YouTube Analytics v2 (read-only)
+      -> official Google Drive v3 metadata, opt-in text extraction (read-only)
 ```
 
 The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate authorization relationships**. Google account consent cannot replace authentication to the MCP gateway.
@@ -21,6 +22,8 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 - `request_service_authorization` (Google consent URL for an authenticated MCP subject).
 - `disconnect_service` (explicitly declines automated revocation; requires a separately authenticated user portal).
 - `youtube_get_channel`, `youtube_list_videos`, `youtube_get_analytics` (read-only, require valid stored provider tokens and respective scopes).
+- `drive_search_files`, `drive_list_folder`, `drive_get_metadata` (read-only, separate Drive OAuth and metadata scope).
+- `drive_read_file` (bounded text only, requires **explicit restricted drive.readonly** consent; unsupported MIME and binary/PDF/EPUB return an error).
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
@@ -55,13 +58,15 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - Provider token documents and PKCE verifiers are encrypted using Fernet.
 - Access controls deny cross-user/cross-account access and missing provider scopes.
 - The current MCP service exposes no provider mutation tools; approvals for write operations remain future work.
-- OAuth callback states are single-use and expire after 10 minutes.
+- OAuth callback states are bound to a specific provider service, atomically single-use, and expire after 10 minutes.
+- Drive file content is never fetched with a metadata-only grant. Google restricted-scope approval and security assessment may be required for public use.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**.
 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Google Drive connector and scope policy](docs/DRIVE_CONNECTOR.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Google OAuth setup](docs/OAUTH_SETUP.md)
 - [ChatGPT integration](docs/CHATGPT_INTEGRATION.md)
