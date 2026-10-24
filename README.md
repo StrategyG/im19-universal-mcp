@@ -68,7 +68,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity and Alembic revision `0004_governance` pass.
 - Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
-- CI uses mock provider responses, **not live Google API credentials**. A separate GitHub Actions job additionally tests concurrent approval consumption and idempotency on a disposable PostgreSQL 16 instance.
+- CI uses mock provider responses, **not live Google API credentials**. A separate GitHub Actions job tests concurrent approval consumption, idempotency, offline vault encryption key rotation, and a **synthetic encrypted backup/restore smoke test** on a disposable PostgreSQL 16 database. This is not a production disaster-recovery exercise.
 
 ## Documentation
 
