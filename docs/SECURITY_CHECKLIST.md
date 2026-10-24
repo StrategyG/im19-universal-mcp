@@ -17,8 +17,13 @@
 - [x] Multi-user store keys and sanitized audit event schema.
 - [ ] Rotate encryption keys via managed KMS.
 - [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
-- [ ] Human approval persistence, single-use semantics and idempotency.
+- [x] Backend approval ledger: expiring one-time token, exact subject/provider/account/action/resource/payload scope, and transactional idempotency receipts.
+- [x] PostgreSQL CI concurrency checks for approvals and idempotency uniqueness.
+- [ ] Independently authenticated human approval portal, authoritative approver roles and persisted evidence validation.
+- [ ] Write-adapter orchestration, provider reconciliation after uncertain outcomes and live acceptance tests.
 - [ ] Distributed HTTP ingress rate limiting and identity-based quotas.
+- [x] Production configuration refuses SQLite, weak audit salt and development subject identities.
+- [x] Database readiness endpoint denies readiness on unavailable/outdated schema.
 - [x] Database refresh locking with expiring owner leases (load testing still needed).
 - [ ] Complete backup, DR and pen-test exercises.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
@@ -26,3 +31,4 @@
 - [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).
 - [ ] Ingress reverse-proxy query log redaction for Google `code` and `state`.
 - [ ] Production audit retention and redaction review.
+- [ ] Approver evidence retention policy, tamper-evident audit exports and reviewer roles.
