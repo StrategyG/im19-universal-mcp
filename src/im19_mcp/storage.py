@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet
-from sqlalchemy import Float, Integer, String, Text, create_engine, select
+from sqlalchemy import Float, Integer, String, Text, create_engine, delete
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -68,29 +68,49 @@ class Vault:
     def decrypt(self, ciphertext: str) -> object:
         return json.loads(self.cipher.decrypt(ciphertext.encode("ascii")))
 
-    def create_state(self, state: str, subject: str, scopes: tuple[str, ...], verifier: str, expires: float) -> None:
+    def create_state(
+        self, state: str, subject: str, scopes: tuple[str, ...], verifier: str,
+        expires: float, *, service: str = "youtube"
+    ) -> None:
+        """Create an opaque state bound to an MCP principal and provider service."""
+        if service not in {"youtube", "drive"} or not subject or not verifier:
+            raise ValueError("oauth_state_binding_invalid")
         hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
         with self.sessions.begin() as session:
             session.add(PendingState(
-                state_hash=hashed, subject=subject, scopes_json=json.dumps(scopes),
+                state_hash=hashed, subject=subject,
+                scopes_json=json.dumps({"scopes": scopes, "service": service}),
                 verifier_ciphertext=self.encrypt(verifier), expires_at=expires,
             ))
 
-    def consume_state(self, state: str) -> tuple[str, tuple[str, ...], str]:
+    def consume_state(self, state: str) -> tuple[str, str, tuple[str, ...], str]:
+        """Atomically remove state; concurrent callbacks cannot redeem it twice.
+
+        DELETE RETURNING is supported by PostgreSQL and modern SQLite (>=3.35).
+        Expired states remain consumed, including on the denial path.
+        """
         hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
+        stmt = (
+            delete(PendingState)
+            .where(PendingState.state_hash == hashed)
+            .returning(
+                PendingState.subject, PendingState.scopes_json,
+                PendingState.verifier_ciphertext, PendingState.expires_at,
+            )
+        )
         with self.sessions.begin() as session:
-            row = session.execute(
-                select(PendingState).where(PendingState.state_hash == hashed).with_for_update()
-            ).scalar_one_or_none()
-            if row is None:
-                raise PermissionError("oauth_state_unknown_or_reused")
-            session.delete(row)
-            expired = row.expires_at <= time.time()
-            result = (row.subject, tuple(json.loads(row.scopes_json)),
-                      str(self.decrypt(row.verifier_ciphertext)))
-        if expired:
+            row = session.execute(stmt).one_or_none()
+        if row is None:
+            raise PermissionError("oauth_state_unknown_or_reused")
+        if row.expires_at <= time.time():
             raise PermissionError("oauth_state_expired")
-        return result
+        binding = json.loads(row.scopes_json)
+        if not isinstance(binding, dict) or binding.get("service") not in {"youtube", "drive"}:
+            raise PermissionError("oauth_state_binding_invalid")
+        scopes = binding.get("scopes")
+        if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
+            raise PermissionError("oauth_state_scope_invalid")
+        return row.subject, binding["service"], tuple(scopes), str(self.decrypt(row.verifier_ciphertext))
 
     def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
         ciphertext = self.encrypt(token)
