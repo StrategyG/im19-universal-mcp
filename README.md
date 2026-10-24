@@ -57,6 +57,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 ## Security / scope
 
 - Provider token documents and PKCE verifiers are encrypted using Fernet.
+- **Offline Fernet key rotation** supports temporary previous-key reads during isolated migration, transactional re-encryption of all credential/PKCE/pending-link records, and primary-only coverage checks. **Production gateways reject old-key fallbacks**; no online rotation or managed KMS is claimed.
 - Access controls deny cross-user/cross-account access and missing provider scopes.
 - The MCP service exposes **no provider mutation tools**. Phase 6 now contains a **database-backed one-time approval + idempotency reservation ledger**, with atomic audit events. **Trusted human portal and actual write adapters remain unimplemented**; they must be independently authenticated before any future write execution.
 - OAuth callback states are bound to a specific provider service, atomically single-use, and expire after 10 minutes.
@@ -73,6 +74,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Institutional governance and idempotency](docs/GOVERNANCE.md)
+- [Offline credential encryption key rotation](docs/KEY_ROTATION.md)
 - [Google Drive connector and scope policy](docs/DRIVE_CONNECTOR.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Google OAuth setup](docs/OAUTH_SETUP.md)
