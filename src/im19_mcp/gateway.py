@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 
 from im19_mcp.config import Settings
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError
+from im19_mcp.rate_limit import RateLimitMiddleware
 from im19_mcp.server import register_tools
 from im19_mcp.storage import Vault
 
@@ -130,6 +131,7 @@ def create_app(settings: Settings | None = None):
         transport_security=TransportSecuritySettings(allowed_hosts=[host]),
         max_request_body_size=1_048_576,
     )
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=120, max_clients=4096)
     return app
 
 
