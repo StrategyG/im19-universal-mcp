@@ -69,6 +69,8 @@ release gate, and users can still be socially engineered into sharing codes.
   verifiers or encrypted vault keys.
 - Use `alembic upgrade head` for upgrades; do not run `metadata.create_all`
   as a production substitute.
+- Run `im19-purge-expired` from a trusted backend scheduler to remove expired
+  encrypted pending connections and PKCE states after their TTL.
 - Rotating Fernet keys without decrypt-and-reencrypt migration makes existing
   credentials unreadable; use managed rotation and backup procedures.
 - Revocation/disconnect is not exposed as an AI action. An independently
