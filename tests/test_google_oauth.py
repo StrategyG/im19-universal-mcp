@@ -90,3 +90,58 @@ async def test_mocked_denied_scope(cfg, vault):
         with pytest.raises(OAuthError, match="google_scope_insufficient"):
             await auth.complete(state=state, code="test-code")
         assert vault.get_credential("u", "youtube") is None
+
+
+def test_drive_consent_is_separate_and_metadata_only_by_default(cfg, vault):
+    auth = GoogleOAuth(cfg, vault)
+    youtube = auth.begin("user1")
+    drive = auth.begin("user1", service="drive")
+    yt_scopes = parse_qs(urlsplit(youtube["authorization_url"]).query)["scope"][0]
+    drive_scopes = parse_qs(urlsplit(drive["authorization_url"]).query)["scope"][0]
+    assert "youtube.readonly" in yt_scopes
+    assert "drive.metadata.readonly" in drive_scopes
+    assert "youtube.readonly" not in drive_scopes
+    assert "/drive.readonly" not in drive_scopes
+
+
+def test_drive_content_scope_never_requested_without_explicit_option(cfg, vault):
+    auth = GoogleOAuth(cfg, vault)
+    consent = auth.begin("user1", service="drive", include_content=True)
+    scopes = parse_qs(urlsplit(consent["authorization_url"]).query)["scope"][0]
+    assert "https://www.googleapis.com/auth/drive.readonly" in scopes
+    with pytest.raises(ValueError, match="google_scope_option_invalid"):
+        auth.begin("user1", service="youtube", include_content=True)
+    with pytest.raises(ValueError, match="google_scope_option_invalid"):
+        auth.begin("user1", service="drive", analytics=True)
+
+
+@pytest.mark.asyncio
+async def test_google_drive_oauth_stored_in_independent_service_vault(cfg, vault):
+    def fake(request: httpx.Request):
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={
+                "access_token": "drive-mock-access",
+                "refresh_token": "drive-mock-refresh",
+                "expires_in": 3600,
+                "scope": "openid https://www.googleapis.com/auth/drive.metadata.readonly",
+            })
+        if request.url.path.endswith("/userinfo"):
+            return httpx.Response(200, json={"sub": "google-account-1"})
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as client:
+        oauth = GoogleOAuth(cfg, vault, http_client=client)
+        state = parse_qs(urlsplit(
+            oauth.begin("user1", service="drive")["authorization_url"]
+        ).query)["state"][0]
+        data = await oauth.complete(state=state, code="mock-code")
+        assert data["service"] == "drive"
+        assert vault.get_credential("user1", "youtube") is None
+        assert vault.get_credential("user2", "drive") is None
+        assert vault.get_credential("user1", "drive")[1]["access_token"] == "drive-mock-access"
+        with pytest.raises(OAuthError, match="SCOPE_REQUIRED"):
+            await oauth.access_token(
+                "user1",
+                {"https://www.googleapis.com/auth/drive.readonly"},
+                service="drive",
+            )
