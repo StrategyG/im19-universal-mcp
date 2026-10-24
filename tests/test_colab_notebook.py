@@ -50,3 +50,21 @@ def test_notebook_fails_closed_by_default_and_pins_reviewed_commit():
     assert "ngrok" not in source.lower()
     assert "cloudflared" not in source.lower()
     assert "getpass(" not in source
+
+
+def test_colab_bootstrap_resolves_kernel_and_subprocess_module_paths():
+    """Regression for ModuleNotFoundError in Colab's migration cell."""
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    code = ["".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "code"]
+    bootstrap = next(cell for cell in code if 'f"{REPO_DIR}[dev]"' in cell and "IM19 IMPORT" in cell)
+    runtime = next(cell for cell in code if "LOCAL_SETTINGS = {" in cell)
+    migration = next(cell for cell in code if 'database_ready(db_engine)' in cell)
+    assert 'sys.executable, "-m", "pip", "install"' in bootstrap
+    assert "sys.path.insert(0, str(REPO_SRC))" in bootstrap
+    assert "importlib.invalidate_caches()" in bootstrap
+    assert "from im19_mcp.readiness import REQUIRED_SCHEMA_REVISION" in bootstrap
+    assert 'LOCAL_ENV["PYTHONPATH"] = str(REPO_SRC)' in runtime
+    assert "sys.path.insert(0, str(REPO_SRC))" in migration
+    assert 'LOCAL_ENV["PYTHONPATH"] = str(REPO_SRC)' in migration
+    assert 'sys.executable, "-m", "alembic", "upgrade", "head"' in migration
+    assert "Sel runtime lokal belum dijalankan" in migration
