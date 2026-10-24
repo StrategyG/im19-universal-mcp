@@ -59,7 +59,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - Access controls deny cross-user/cross-account access and missing provider scopes.
 - The current MCP service exposes no provider mutation tools; approvals for write operations remain future work.
 - OAuth callback states are bound to a specific provider service, atomically single-use, and expire after 10 minutes.
-- Drive file content is never fetched with a metadata-only grant. Google restricted-scope approval and security assessment may be required for public use.
+- Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**.
 
