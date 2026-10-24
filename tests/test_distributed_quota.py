@@ -159,3 +159,16 @@ async def test_asgi_missing_network_peer_fails_closed(quota):
 
     await wrapper(scope, receive, send)
     assert frames[0]["status"] == 503
+
+
+def test_quota_supports_timestamps_after_year_2038(quota):
+    future = 2_400_000_001  # beyond signed 32-bit Unix epoch
+    assert quota.consume("http:peer", "future-client", limit=1, now=future)[0]
+    assert quota.consume("http:peer", "future-client", limit=1, now=future)[0] is False
+    assert quota.consume("http:peer", "future-client", limit=1, now=future + 60)[0]
+
+
+@pytest.mark.parametrize("clock", [float("inf"), float("-inf"), float("nan"), True, -1])
+def test_invalid_timestamp_is_not_silently_admitted(quota, clock):
+    with pytest.raises(ValueError, match="invalid_quota_time"):
+        quota.consume("http:peer", "invalid-clock", limit=1, now=clock)
