@@ -32,6 +32,11 @@ def purge_expired() -> None:
     from im19_mcp.governance import ApprovalLedger
 
     expired["governance_approvals"] = ApprovalLedger(store).purge_expired_approvals()
+    from im19_mcp.distributed_quota import DistributedQuota
+
+    expired["rate_windows"] = DistributedQuota(
+        store.engine, secret=cfg.audit_salt,
+    ).purge_expired()
     print(json.dumps(expired, sort_keys=True))
 
 
