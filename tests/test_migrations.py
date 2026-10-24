@@ -17,12 +17,17 @@ def test_full_upgrade_including_confirmations_and_refresh_leases(tmp_path, monke
     schema = inspect(engine)
     assert {
         "oauth_states", "oauth_credentials", "oauth_pending_links",
-        "audit_events", "alembic_version",
+        "audit_events", "alembic_version", "governance_approvals",
+        "governance_mutation_receipts",
     }.issubset(set(schema.get_table_names()))
     columns = {col["name"] for col in schema.get_columns("oauth_credentials")}
     assert {"refresh_owner", "refresh_until"}.issubset(columns)
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0003_refresh_leases"
+            "0004_governance"
         )
+    assert "uq_governance_mutation_identity" in {
+        constraint["name"] for constraint in
+        schema.get_unique_constraints("governance_mutation_receipts")
+    }
     engine.dispose()
