@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import time
 from typing import Final
 
@@ -89,7 +90,8 @@ class DistributedQuota:
             raise ValueError("invalid_quota_parameters")
         digest = self._digest(namespace, identity, window_seconds)
         timestamp = time.time() if now is None else now
-        if not isinstance(timestamp, (int, float)) or timestamp < 0:
+        if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
+                or not math.isfinite(timestamp) or timestamp < 0):
             raise ValueError("invalid_quota_time")
         # An absolute bucket avoids local-worker state. NTP-synchronized clocks
         # are required across gateway nodes; the DB ensures atomic increments.
