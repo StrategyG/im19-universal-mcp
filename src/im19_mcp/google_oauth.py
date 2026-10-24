@@ -23,6 +23,8 @@ USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 SCOPES = {
     "youtube": ("https://www.googleapis.com/auth/youtube.readonly",),
     "youtube_analytics": ("https://www.googleapis.com/auth/yt-analytics.readonly",),
+    "drive_metadata": ("https://www.googleapis.com/auth/drive.metadata.readonly",),
+    "drive_content": ("https://www.googleapis.com/auth/drive.readonly",),
 }
 OPENID = "openid"
 
@@ -38,17 +40,33 @@ class GoogleOAuth:
         self.settings, self.vault = settings, vault
         self.client = http_client
 
-    def begin(self, subject: str, *, analytics: bool = False) -> dict:
+    def begin(
+        self, subject: str, *, service: str = "youtube",
+        analytics: bool = False, include_content: bool = False
+    ) -> dict:
+        """Request only scopes needed by this service and explicit elevated options.
+
+        drive.readonly is a RESTRICTED Google scope; never add it implicitly.
+        """
         if not subject:
             raise PermissionError("authenticated_subject_required")
+        if service not in {"youtube", "drive"}:
+            raise ValueError("google_service_unsupported")
+        if (service != "youtube" and analytics) or (service != "drive" and include_content):
+            raise ValueError("google_scope_option_invalid")
         verifier = secrets.token_urlsafe(48)
         state = secrets.token_urlsafe(32)
         challenge = base64.urlsafe_b64encode(
             hashlib.sha256(verifier.encode("ascii")).digest()
         ).rstrip(b"=").decode("ascii")
-        scopes = tuple(sorted(set((OPENID,) + SCOPES["youtube"] +
-                                  (SCOPES["youtube_analytics"] if analytics else ()))))
-        self.vault.create_state(state, subject, scopes, verifier, time.time() + 600)
+        base_scopes = SCOPES["youtube"] if service == "youtube" else SCOPES["drive_metadata"]
+        elevated = (
+            SCOPES["youtube_analytics"] if analytics
+            else SCOPES["drive_content"] if include_content
+            else ()
+        )
+        scopes = tuple(sorted(set((OPENID,) + base_scopes + elevated)))
+        self.vault.create_state(state, subject, scopes, verifier, time.time() + 600, service=service)
         params = {
             "client_id": self.settings.google_client_id,
             "redirect_uri": self.settings.google_redirect_uri,
@@ -60,7 +78,8 @@ class GoogleOAuth:
             "access_type": "offline",
             "include_granted_scopes": "true",
         }
-        return {"status": "AUTH_REQUIRED", "authorization_url": AUTH_URL + "?" + urlencode(params),
+        return {"status": "AUTH_REQUIRED", "service": service,
+                "authorization_url": AUTH_URL + "?" + urlencode(params),
                 "expires_in": 600, "requested_scopes": list(scopes)}
 
     async def _post(self, url: str, data: dict) -> dict:
@@ -96,7 +115,7 @@ class GoogleOAuth:
     async def complete(self, *, state: str, code: str) -> dict:
         if not state or len(state) > 256 or not code or len(code) > 4096:
             raise PermissionError("oauth_callback_invalid")
-        subject, expected, verifier = self.vault.consume_state(state)
+        subject, service, expected, verifier = self.vault.consume_state(state)
         token = await self._post(TOKEN_URL, {
             "code": code,
             "client_id": self.settings.google_client_id,
@@ -112,7 +131,7 @@ class GoogleOAuth:
         if not set(expected).issubset(granted):
             raise OAuthError("google_scope_insufficient")
         account_id = await self._userinfo(access)
-        existing = self.vault.get_credential(subject, "youtube")
+        existing = self.vault.get_credential(subject, service)
         if existing and existing[0] != account_id:
             raise OAuthError("google_account_change_requires_disconnect")
         refresh = token.get("refresh_token") or (existing[1].get("refresh_token") if existing else "")
@@ -120,13 +139,17 @@ class GoogleOAuth:
         lifetime = token.get("expires_in", 0)
         if not isinstance(lifetime, (int, float)) or lifetime <= 0:
             raise OAuthError("google_token_expiry_invalid")
-        self.vault.put_credential(subject, "youtube", account_id, data, time.time() + lifetime)
-        self.vault.audit(subject, "youtube", "oauth.complete", "SUCCESS")
-        return {"status": "CONNECTED", "service": "youtube", "account_id": account_id,
+        self.vault.put_credential(subject, service, account_id, data, time.time() + lifetime)
+        self.vault.audit(subject, service, "oauth.complete", "SUCCESS")
+        return {"status": "CONNECTED", "service": service, "account_id": account_id,
                 "scopes": sorted(granted)}
 
-    async def access_token(self, subject: str, required_scopes: set[str]) -> tuple[str, str]:
-        found = self.vault.get_credential(subject, "youtube")
+    async def access_token(
+        self, subject: str, required_scopes: set[str], *, service: str = "youtube"
+    ) -> tuple[str, str]:
+        if service not in {"youtube", "drive"}:
+            raise OAuthError("UNKNOWN_SERVICE")
+        found = self.vault.get_credential(subject, service)
         if found is None:
             raise OAuthError("AUTH_REQUIRED")
         account_id, data, expires = found
@@ -150,12 +173,14 @@ class GoogleOAuth:
         fresh = {"access_token": access,
                  "refresh_token": updated.get("refresh_token") or refresh,
                  "scopes": data["scopes"]}
-        self.vault.put_credential(subject, "youtube", account_id, fresh, time.time() + duration)
+        self.vault.put_credential(subject, service, account_id, fresh, time.time() + duration)
         return account_id, access
 
-    async def disconnect(self, subject: str) -> bool:
+    async def disconnect(self, subject: str, *, service: str = "youtube") -> bool:
         """Only call from a separately authorized human confirmation endpoint."""
-        current = self.vault.get_credential(subject, "youtube")
+        if service not in {"youtube", "drive"}:
+            raise OAuthError("UNKNOWN_SERVICE")
+        current = self.vault.get_credential(subject, service)
         if current is None:
             return False
         _account, data, _expiry = current
@@ -170,6 +195,6 @@ class GoogleOAuth:
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise OAuthError("google_revocation_failed_no_local_disconnect") from exc
-        removed = self.vault.delete_credential(subject, "youtube")
-        self.vault.audit(subject, "youtube", "oauth.disconnect", "SUCCESS")
+        removed = self.vault.delete_credential(subject, service)
+        self.vault.audit(subject, service, "oauth.disconnect", "SUCCESS")
         return removed
