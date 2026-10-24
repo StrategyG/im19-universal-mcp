@@ -87,3 +87,22 @@ def test_wrong_confirmation_code_is_denied(vault):
     )
     with pytest.raises(PermissionError):
         vault.confirm_link("user-a", "youtube", "wrong-confirmation-code-123456")
+
+
+def test_expired_claims_are_purged_without_exposing_secrets(vault):
+    from im19_mcp.storage import PendingLink, PendingState
+    from sqlalchemy import select, update
+
+    now = time.time()
+    vault.create_state("stale-oauth", "user-a", (), "verifier", now - 3)
+    vault.create_state("good-oauth", "user-a", (), "verifier", now + 100)
+    vault.stage_link("user-a", "drive", "account-id",
+                     {"refresh_token": "SECRET-NEVER-PRINT"}, now + 100)
+    with vault.sessions.begin() as session:
+        session.execute(update(PendingLink).values(expires_at=now - 1))
+    counts = vault.purge_expired(now=now)
+    assert counts == {"oauth_states": 1, "oauth_pending_links": 1}
+    assert "SECRET-NEVER-PRINT" not in str(counts)
+    with vault.sessions() as session:
+        assert len(session.execute(select(PendingLink)).all()) == 0
+        assert len(session.execute(select(PendingState)).all()) == 1
