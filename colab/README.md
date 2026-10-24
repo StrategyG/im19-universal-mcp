@@ -3,7 +3,7 @@
 **Notebook:** [IM19_Universal_MCP_Colab.ipynb](IM19_Universal_MCP_Colab.ipynb)
 
 **Buka langsung di Google Colab:**
-https://colab.research.google.com/github/StrategyG/im19-universal-mcp/blob/feat/colab-cpu-runtime/colab/IM19_Universal_MCP_Colab.ipynb
+https://colab.research.google.com/github/StrategyG/im19-universal-mcp/blob/fix/colab-import-bootstrap/colab/IM19_Universal_MCP_Colab.ipynb
 
 Notebook ini mengambil dan mengunci repository pada commit
 e60d8276f6cb0b87b30fb04d0819f788dcad2544 dari branch
@@ -25,6 +25,22 @@ feat/distributed-quotas-v1. Ia menggunakan runtime CPU dan Python >= 3.11.
 
 Semua sel berjalan di CPU, tidak membutuhkan Google API key, tidak melakukan
 order atau perubahan pada akun eksternal, dan tidak membuka port publik.
+
+
+## Memperbaiki ModuleNotFoundError: im19_mcp
+
+Jika sel migrasi gagal dengan \`No module named 'im19_mcp'\`, jalankan sel
+**Clone repository**, **Instal package**, dan **Runtime dev** terlebih dahulu.
+Notebook versi perbaikan langsung memeriksa keberadaan
+\`src/im19_mcp/readiness.py\`, memasang project melalui
+\`sys.executable -m pip install -e <repo>[dev]\`, lalu menyertakan
+\`<repo>/src\` pada \`sys.path\` **kernel** dan \`PYTHONPATH\` **subprocess**.
+
+Bila instalasi pip benar-benar gagal, tampilkan error instalasinya alih-alih
+melewati sel. Jangan menyiasati kegagalan dengan memasukkan nama package
+lain, mengubah import menjadi \`im19\`, atau menginstal dari project tak dikenal.
+Gunakan \`Restart runtime\` dan \`Run all\` hanya jika kernel lama menyimpan
+module versi berbeda, dan jangan mencetak kredensial dalam hasil diagnostik.
 
 ## Keamanan
 
