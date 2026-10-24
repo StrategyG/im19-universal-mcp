@@ -32,6 +32,7 @@ class Settings:
     dev_subject: str
     bind_host: str = "127.0.0.1"
     port: int = 8000
+    deployment_environment: str = "production"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,6 +51,7 @@ class Settings:
             dev_subject=os.getenv("IM19_DEV_SUBJECT", ""),
             bind_host=os.getenv("IM19_BIND_HOST", "127.0.0.1"),
             port=int(os.getenv("IM19_PORT", "8000")),
+            deployment_environment=os.getenv("IM19_DEPLOYMENT_ENV", "production"),
         )
 
     def google_enabled(self) -> bool:
@@ -72,3 +74,28 @@ class Settings:
             raise ValueError("mcp_resource_must_end_with_/mcp")
         if not 1 <= self.port <= 65535:
             raise ValueError("invalid_port")
+        if self.deployment_environment not in {"development", "staging", "production"}:
+            raise ValueError("invalid_deployment_environment")
+        if self.deployment_environment == "production":
+            if not self.database_url.startswith("postgresql+psycopg://"):
+                raise ValueError("production_requires_postgresql")
+            if self.dev_subject:
+                raise ValueError("production_dev_subject_forbidden")
+            if len(self.audit_salt) < 32:
+                raise ValueError("production_requires_strong_audit_salt")
+            google_fields = (
+                self.google_client_id, self.google_client_secret,
+                self.google_redirect_uri,
+            )
+            if any(google_fields):
+                if not all(google_fields) or not self.google_enabled():
+                    raise ValueError("production_google_oauth_incomplete")
+                callback = urlsplit(self.google_redirect_uri)
+                resource = urlsplit(self.mcp_resource)
+                if (
+                    callback.scheme != "https"
+                    or callback.netloc != resource.netloc
+                    or callback.path != "/oauth/google/callback"
+                    or callback.query
+                ):
+                    raise ValueError("production_google_callback_origin_mismatch")
