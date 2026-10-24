@@ -20,6 +20,7 @@ def cfg():
         mcp_introspection="https://identity.test/introspect",
         mcp_client_id="client", mcp_client_secret="secret",
         dev_subject="spoofed-stdio-value",
+        deployment_environment="staging",
     )
 
 
@@ -55,6 +56,20 @@ async def test_mocked_introspection_checks_issuer_audience_scope_and_expiry(cfg,
     assert (result is not None) is allowed
     if allowed:
         assert result.subject == "trusted-subject"
+
+
+def test_production_config_denies_sqlite_dev_subject_and_weak_salt(cfg):
+    prod = replace(cfg, deployment_environment="production")
+    with pytest.raises(ValueError, match="production_requires_postgresql"):
+        prod.require_remote()
+    strong = replace(
+        prod, database_url="postgresql+psycopg://user:pass@host/db"
+    )
+    with pytest.raises(ValueError, match="production_dev_subject_forbidden"):
+        strong.require_remote()
+    with pytest.raises(ValueError, match="production_requires_strong_audit_salt"):
+        replace(strong, dev_subject="").require_remote()
+    replace(strong, dev_subject="", audit_salt="x" * 32).require_remote()
 
 
 def test_create_app_requires_valid_issuer_settings(cfg):
