@@ -97,3 +97,44 @@ def test_postgres_unique_idempotency_rejects_two_distinct_approvals():
         assert len(session.execute(select(MutationReceipt).where(
             MutationReceipt.subject == identity,
         )).scalars().all()) == 1
+
+
+def test_postgres_atomic_offline_key_rotation_covers_all_sensitive_tables():
+    """Real PostgreSQL transaction: old-key ciphertext is rewrapped in one pass."""
+    import time
+    from cryptography.fernet import Fernet, InvalidToken
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    old_key = os.environ["IM19_INTEGRATION_FERNET_KEY"]
+    new_key = Fernet.generate_key().decode()
+    suffix = secrets.token_hex(12)
+    old = Vault(url, encryption_key=old_key, audit_salt="ci-test-salt")
+    old.put_credential(
+        suffix, "drive", "google-account-mock",
+        {"access_token": "simulated-secret"}, time.time() + 900,
+    )
+    state = f"ci-oauth-{suffix}"
+    old.create_state(state, suffix, ("openid",), "mock-verifier", time.time() + 100)
+    claim = old.stage_link(
+        suffix, "youtube", "google-account-mock",
+        {"access_token": "simulated-pending-token"}, time.time() + 900,
+    )
+
+    rotating = Vault(url, encryption_key=new_key, previous_keys=(old_key,))
+    assert rotating.get_credential(suffix, "drive") is not None
+    # Rotation is an OFFLINE operation. This disposable CI DB has no writers
+    # while rotating, and contains no real credentials or customer data.
+    counts = rotating.rotate_encryption(offline_maintenance_ack=True)
+    assert counts["oauth_credentials"] >= 1
+    assert counts["oauth_states"] >= 1
+    assert counts["oauth_pending_links"] >= 1
+
+    primary = Vault(url, encryption_key=new_key)
+    assert primary.verify_primary_key_coverage() == counts
+    assert primary.get_credential(suffix, "drive")[1]["access_token"] == "simulated-secret"
+    assert primary.consume_state(state)[-1] == "mock-verifier"
+    assert primary.confirm_link(suffix, "youtube", claim)[1]["access_token"] == (
+        "simulated-pending-token"
+    )
+    with pytest.raises(InvalidToken):
+        old.get_credential(suffix, "drive")
