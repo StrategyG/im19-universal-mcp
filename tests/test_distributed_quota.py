@@ -5,12 +5,11 @@ concurrent PostgreSQL worker admission is tested in the dedicated CI job.
 """
 from __future__ import annotations
 
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
