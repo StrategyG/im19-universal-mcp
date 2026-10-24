@@ -68,8 +68,11 @@ confirmation or a guessed approval code cannot issue any approval.
 
 ## Acceptance and non-goals
 
-Mock/SQLite tests prove internal one-use/cross-user/idempotency semantics; a
-PostgreSQL CI integration service is still required to prove concurrent behavior
-on the intended production database. OAuth browser-session binding, operational
-KMS/key rotation, ingress quota, monitoring, disaster recovery, and live ChatGPT
-login remain unresolved. No external writes have been enabled.
+Mock/SQLite tests prove internal one-use/cross-user/idempotency semantics.
+GitHub Actions additionally provisions a **disposable PostgreSQL 16 service**,
+runs all Alembic migrations, and tests concurrent reservations and unique
+idempotency enforcement using real database transactions. This is not a
+production workload test and does not validate any external provider mutation.
+OAuth browser-session binding, operational KMS/key rotation, ingress quotas,
+monitoring, disaster recovery, and live ChatGPT login remain unresolved.
+No external writes have been enabled.
