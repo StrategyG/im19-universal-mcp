@@ -16,12 +16,14 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from im19_mcp.config import Settings
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError
 from im19_mcp.rate_limit import RateLimitMiddleware
+from im19_mcp.readiness import database_ready
 from im19_mcp.server import register_tools
 from im19_mcp.storage import Vault
 
@@ -93,6 +95,16 @@ def create_gateway(settings: Settings | None = None) -> MCPServer:
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "service": "im19-universal-mcp"},
                             headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/ready", methods=["GET"])
+    async def ready(_: Request) -> JSONResponse:
+        """Return 503 until database is reachable and schema is current."""
+        healthy = await run_in_threadpool(database_ready, vault.engine)
+        return JSONResponse(
+            {"status": "ready" if healthy else "unavailable"},
+            status_code=200 if healthy else 503,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @server.custom_route("/oauth/google/callback", methods=["GET"])
     async def google_callback(request: Request) -> JSONResponse:
