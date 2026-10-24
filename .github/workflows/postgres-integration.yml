@@ -2,8 +2,13 @@ name: IM19 PostgreSQL Integration
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main]
   pull_request:
+
+# Avoid duplicate push and PR checks; cancel jobs for superseded commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
