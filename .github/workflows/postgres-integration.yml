@@ -91,13 +91,15 @@ jobs:
             --no-owner --no-privileges --exit-on-error < "$backup"
           python - <<'PY'
           import os
-          from sqlalchemy import create_engine
+          from sqlalchemy.engine import make_url
           from im19_mcp.readiness import database_ready
           from im19_mcp.storage import Vault
 
-          restore_url = os.environ["IM19_DATABASE_URL"].replace(
-              "/im19_test", "/im19_restore"
-          )
+          # Use SQLAlchemy's URL parser: a string replacement would change
+          # the username too because "/im19_test" occurs in the authority.
+          restore_url = make_url(os.environ["IM19_DATABASE_URL"]).set(
+              database="im19_restore"
+          ).render_as_string(hide_password=False)
           v = Vault(
               restore_url,
               encryption_key=os.environ["IM19_INTEGRATION_FERNET_KEY"],
