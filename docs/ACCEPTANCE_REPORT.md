@@ -6,8 +6,8 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
 ## Automated tests verified
 
 - Python 3.11: CI success.
-- Python 3.12: CI success; **124 tests passed, 5 PostgreSQL-only tests skipped** on commit `32e9e88d` (shared quotas and provider-scope isolation).
-- PostgreSQL 16 service CI: **5 integration tests passed**, including concurrent approval/idempotency, full sensitive-table Fernet key rotation, shared quota admission across four worker pools and namespace isolation.
+- Python 3.12: CI success; **131 tests passed, 6 PostgreSQL-only tests skipped** on commit `27e66e6f` (shared quotas and provider-scope isolation).
+- PostgreSQL 16 service CI: **6 integration tests passed**, including concurrent approval/idempotency, full sensitive-table Fernet key rotation, shared quota admission across four worker pools and namespace isolation.
 - Synthetic encrypted PostgreSQL 16 `pg_dump`/`pg_restore`: **PASS**, restored schema revision and a job-only credential decrypt verified. This is not a production DR drill.
 - Production configuration fail-closed tests, database readiness, audit and approval replay tests included.
 - Docker image: successfully built.
@@ -18,10 +18,10 @@ production acceptance.** Evidence is linked to exact GitHub Actions runs.
   after security workflow identified known issues in 47.0.0.
 
 Evidence:
-- [CI run 40129594889](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129594889)
-- [Security run 40129594877](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129594877)
-- [PostgreSQL integration run 40129594906](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129594906)
-- Verified revision: `32e9e88d8bb5a5db2d00d4132bf31d7baaba1577`.
+- [CI run 40129913647](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129913647)
+- [Security run 40129913649](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129913649)
+- [PostgreSQL integration run 40129913672](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40129913672)
+- Verified revision: `27e66e6f3cbe7e94ccfd469dede3c16bf558a94a`.
   This acceptance report is a later documentation-only revision. Review the latest PR checks before merge.
 
 ## Coverage by evidence type
@@ -56,6 +56,8 @@ Evidence:
 | MCP principal read/OAuth quotas, verified subject only | MCP integration + SQLite | PASS |
 | Atomic shared limits across four PostgreSQL worker pools | Real PostgreSQL 16 concurrency tests | PASS |
 | Quota keys do not store raw IP/subject; X-Forwarded-For ignored | SQL row inspection + ASGI tests | PASS |
+| Production gateway actually installs DB limiter and rejects unreachable DB | ASGI integration + config tests | PASS |
+| 64-bit quota window timestamps beyond 2038, non-finite clock rejection | SQLite + PostgreSQL 16 tests | PASS |
 | Quota cleanup and database outage denial | SQLite tests | PASS |
 | Approval binding (subject, provider, account, resource and SHA-256 payload) | SQLite unit tests | PASS |
 | One-use, expiring approvals + exact idempotency receipt | SQLite unit + PostgreSQL concurrent transactions | PASS |
