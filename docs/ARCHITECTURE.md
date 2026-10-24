@@ -3,7 +3,8 @@
 ## Mission
 A single provider-neutral MCP integration gateway, not a substitute for the
 official APIs or OAuth consent. This iteration implements the MCP control plane,
-an initial Google OAuth token lifecycle, and YouTube Data/Analytics read-only APIs.
+an initial Google OAuth token lifecycle, and YouTube Data/Analytics read-only APIs, plus bounded Drive metadata and
+explicitly authorized text retrieval.
 
 ## Trust zones
 
@@ -18,6 +19,7 @@ IM19 Remote MCP (MCP resource server /mcp, issuer + aud + scopes verified)
    +-- audit store (pseudonymous subject, action, timestamp, status)
    +-- Google OAuth flow --> Google consent + token + userinfo
    +-- YouTube read-only connector --> official YouTube Data/Analytics APIs
+   +-- Drive metadata/text connector --> official Drive v3 APIs (text requires new scope)
 ```
 
 The OAuth identity provider for ChatGPT-to-IM19 MUST issue tokens with resource
@@ -32,6 +34,7 @@ MCP authorization issuer.
 - storage.py — SQLAlchemy tables, Fernet-encrypted provider credential documents, one-use state.
 - google_oauth.py — Google Authorization Code + PKCE, callback exchange, refresh and revocation.
 - youtube.py — fixed-host, read-only official Google APIs, sanitized provider error classes.
+- drive.py — metadata search, folder listing and bounded opt-in text reads from fixed Drive v3 endpoints.
 - server.py — tool discovery, service authorization URL, status, protected YouTube tools.
 - gateway.py — OAuth bearer introspection for remote HTTP; public health and OAuth callback only.
 
@@ -40,7 +43,9 @@ MCP authorization issuer.
 - Local stdio mode accepts an optional IM19_DEV_SUBJECT strictly for trusted development.
 - Remote mode refuses startup without issuer/resource/introspection secrets and token vault key.
 - Remote mode does not honor the stdio development subject.
-- OAuth callback is public but state is random, time-bound, server-stored and single-use.
+- OAuth callback is public but state is random, service-bound, time-bound, server-stored
+  and atomically single-use. Binding to an independently authenticated browser session
+  remains a production requirement; a random state is not a substitute for it.
 - Exposing /mcp to ChatGPT requires an independent OAuth provider capable of MCP resource binding.
 - No provider writes, email sends, uploads, deletes or repository changes are exposed.
 
