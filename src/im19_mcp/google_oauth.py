@@ -17,7 +17,7 @@ from im19_mcp.config import Settings
 from im19_mcp.storage import Vault
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105: official public endpoint, not a credential
+TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 SCOPES = {
