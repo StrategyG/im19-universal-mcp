@@ -22,7 +22,11 @@ provider tools fail closed with `AUTH_REQUIRED`. Do NOT configure
 
 Provision a managed PostgreSQL database, application credentials with least
 privilege, an independent random `IM19_FERNET_KEY`, and random
-`IM19_AUDIT_SALT`. Do not commit real `.env` or persist credentials in build
+`IM19_AUDIT_SALT`. If the Fernet key must change, follow the [offline
+key rotation runbook](KEY_ROTATION.md), including a verified backup, stopping
+all writers, passing an explicit maintenance acknowledgment, and confirming
+primary-only decryption before service restart. Never leave
+`IM19_FERNET_PREVIOUS_KEYS` configured in a production gateway. Do not commit real `.env` or persist credentials in build
 args, untrusted PR jobs or model-visible tool input.
 
 ```bash
@@ -104,7 +108,10 @@ monitoring and operational alarm must be configured separately.
   end-to-end ChatGPT tool invocation, OAuth provider review where necessary.
 - Independently authenticated human approval portal, approver role checks and
   future provider write-adapter reconciliation (read-only MCP stays enabled).
-- Managed KMS / encryption key rotation, backup/restore drills, reliable
+- Manual offline Fernet re-encryption is implemented; managed KMS/HSM custody,
+  verified backup/restore drills and independent key rotation controls remain
+  release gates.
+- Managed monitoring and alerting, reliable
   audit/log retention and central distributed ingress rate limiting.
 - Penetration test, incident response runbook and per-tenant access audit.
 
