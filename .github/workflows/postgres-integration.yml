@@ -1,0 +1,52 @@
+name: IM19 PostgreSQL Integration
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-transactions:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: im19_test
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: im19_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U im19_test -d im19_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      # This database exists only in the ephemeral GitHub Actions job.
+      IM19_DATABASE_URL: postgresql+psycopg://im19_test:ci-only-password@127.0.0.1:5432/im19_test
+      IM19_INTEGRATION_DB_URL: postgresql+psycopg://im19_test:ci-only-password@127.0.0.1:5432/im19_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project and test requirements
+        run: python -m pip install -e ".[dev]"
+      - name: Generate job-only Fernet key
+        run: |
+          python - <<'PY'
+          import os
+          from cryptography.fernet import Fernet
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              f.write("IM19_INTEGRATION_FERNET_KEY=" + Fernet.generate_key().decode() + "\n")
+          PY
+      - name: Run Alembic migrations on real PostgreSQL
+        run: |
+          alembic upgrade head
+          alembic current
+      - name: Verify SQL transactions and worker contention
+        run: python -m pytest -q tests/integration/test_postgres_governance.py
