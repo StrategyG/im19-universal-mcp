@@ -25,7 +25,11 @@ def purge_expired() -> None:
         cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt,
     )
     # Never output subjects, codes, OAuth tokens or ciphertext.
-    print(json.dumps(store.purge_expired(), sort_keys=True))
+    expired = store.purge_expired()
+    from im19_mcp.governance import ApprovalLedger
+
+    expired["governance_approvals"] = ApprovalLedger(store).purge_expired_approvals()
+    print(json.dumps(expired, sort_keys=True))
 
 
 if __name__ == "__main__":
