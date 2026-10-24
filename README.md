@@ -18,7 +18,7 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 
 ## Implemented tools
 
-- `list_available_services`, `get_service_capabilities`, `get_connection_status`.
+- `list_available_services`, `get_service_capabilities`, `get_connection_status` (local credential status only; **not a live Google API verification**).
 - `request_service_authorization` (Google consent URL for an authenticated MCP subject).
 - `confirm_service_authorization` (explicit same-subject, short-lived one-time code confirmation; callback alone cannot link an account).
 - `disconnect_service` (explicitly declines automated revocation; requires a separately authenticated user portal).
@@ -62,6 +62,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - OAuth callback states are bound to a specific provider service, atomically single-use, and expire after 10 minutes.
 - Google callbacks store credentials in an encrypted pending vault, never as a connected account. The user must confirm a one-time code (5-minute TTL) from the browser via the authenticated MCP tool.
 - Database-backed refresh leases and compare-and-set updates mitigate concurrent refresh, disconnect races and token resurrection.
+- `im19-purge-expired` is a trusted maintenance command for expiring unused OAuth states and encrypted pending confirmations; schedule it in backend operations, not through MCP.
 - Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**.
