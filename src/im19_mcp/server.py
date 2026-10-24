@@ -1,6 +1,7 @@
 """IM19 MCP tool surface. No model-supplied user identifiers or access tokens."""
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Callable
@@ -36,6 +37,21 @@ def register_tools(
     def audit(user: str, action: str, status: str) -> None:
         if vault:
             vault.audit(user, "youtube", action, status)
+
+    @server.resource("im19://capabilities")
+    def capabilities_resource() -> str:
+        """Public, non-secret snapshot of implemented provider capabilities."""
+        return json.dumps({"services": list_services(), "live_connection_claimed": False},
+                          separators=(",", ":"))
+
+    @server.prompt()
+    def im19_security_review() -> str:
+        """Start an evidence-first IM19 connection and authorization review."""
+        return (
+            "Audit this IM19 MCP connection: verify authenticated principal, "
+            "provider OAuth consent, per-tool scopes, audit provenance and "
+            "runtime test evidence. Do not infer live connectivity from registry metadata."
+        )
 
     @server.tool(name="list_available_services")
     def list_available_services() -> dict:
