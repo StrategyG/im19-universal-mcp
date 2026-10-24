@@ -139,10 +139,40 @@ class GoogleOAuth:
         lifetime = token.get("expires_in", 0)
         if not isinstance(lifetime, (int, float)) or lifetime <= 0:
             raise OAuthError("google_token_expiry_invalid")
-        self.vault.put_credential(subject, service, account_id, data, time.time() + lifetime)
-        self.vault.audit(subject, service, "oauth.complete", "SUCCESS")
-        return {"status": "CONNECTED", "service": service, "account_id": account_id,
-                "scopes": sorted(granted)}
+        confirmation_code = self.vault.stage_link(
+            subject, service, account_id, data, time.time() + lifetime,
+        )
+        self.vault.audit(subject, service, "oauth.callback", "PENDING_CONFIRMATION")
+        return {
+            "status": "PENDING_CONFIRMATION",
+            "service": service,
+            "account_id": account_id,
+            "confirmation_code": confirmation_code,
+            "expires_in": 300,
+            "instructions": (
+                "Copy this one-time code into IM19 "
+                "confirm_service_authorization. Never share the code with others."
+            ),
+        }
+
+    def confirm(self, subject: str, service: str, confirmation_code: str) -> dict:
+        """Final link only after the originating MCP principal confirms the code.
+
+        A Google OAuth callback alone NEVER saves a usable provider connection.
+        """
+        try:
+            account_id, data, expiry = self.vault.confirm_link(
+                subject, service, confirmation_code,
+            )
+            self.vault.put_credential(subject, service, account_id, data, expiry)
+        except (PermissionError, ValueError) as exc:
+            self.vault.audit(subject, service, "oauth.confirm", "DENY")
+            raise OAuthError("confirmation_invalid_or_expired") from exc
+        self.vault.audit(subject, service, "oauth.confirm", "SUCCESS")
+        return {
+            "status": "CONNECTED", "service": service, "account_id": account_id,
+            "scopes": list(data.get("scopes", [])),
+        }
 
     async def access_token(
         self, subject: str, required_scopes: set[str], *, service: str = "youtube"
