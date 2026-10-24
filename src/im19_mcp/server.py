@@ -131,6 +131,25 @@ def register_tools(
         except (ValueError, PermissionError):
             return {"status": "DENY", "reason": "oauth_request_invalid"}
 
+    @server.tool(name="confirm_service_authorization")
+    def confirm_service_authorization(service: str, confirmation_code: str) -> dict:
+        """Explicitly link a Google account using one-time code from OAuth browser callback.
+
+        The code is valid only for the currently authenticated MCP subject.
+        It is not a Google access token or refresh token. Never share it.
+        """
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if service not in {"youtube", "drive"}:
+            return {"status": "NOT_IMPLEMENTED", "service": service}
+        if oauth is None:
+            return {"status": "NOT_CONFIGURED", "reason": "google_oauth_credentials_required"}
+        try:
+            return oauth.confirm(user, service, confirmation_code)
+        except OAuthError:
+            return {"status": "DENY", "reason": "confirmation_invalid_or_expired"}
+
     @server.tool(name="disconnect_service")
     def disconnect_service(service: str) -> dict:
         """Human approval portal is required before revocation; this tool cannot revoke."""
