@@ -2,8 +2,13 @@ name: IM19 PostgreSQL Integration
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main]
   pull_request:
+
+# Avoid duplicate push and PR checks; cancel jobs for superseded commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -41,12 +46,75 @@ jobs:
           python - <<'PY'
           import os
           from cryptography.fernet import Fernet
+          key = Fernet.generate_key().decode()
+          # Mask the ephemeral test key before subsequent steps expose env.
+          # The key is synthetic CI-only material, never a real production key.
+          print("::add-mask::" + key)
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-              f.write("IM19_INTEGRATION_FERNET_KEY=" + Fernet.generate_key().decode() + "\n")
+              f.write("IM19_INTEGRATION_FERNET_KEY=" + key + "\n")
           PY
       - name: Run Alembic migrations on real PostgreSQL
         run: |
           alembic upgrade head
           alembic current
+      - name: Backup and restore encrypted synthetic database (ephemeral CI)
+        env:
+          PGPASSWORD: ci-only-password
+        run: |
+          set -euo pipefail
+          # Add only a synthetic row with the job-generated Fernet key.
+          python - <<'PY'
+          import os
+          import time
+          from im19_mcp.storage import Vault
+
+          v = Vault(
+              os.environ["IM19_INTEGRATION_DB_URL"],
+              encryption_key=os.environ["IM19_INTEGRATION_FERNET_KEY"],
+              audit_salt="synthetic-backup-salt",
+          )
+          v.put_credential(
+              "ci-restore-probe", "youtube", "ci-mock-account",
+              {"access_token": "CI-SYNTHETIC-NEVER-PRODUCTION"},
+              time.time() + 7200,
+          )
+          PY
+          backup="${RUNNER_TEMP}/im19-ci-test.dump"
+          trap 'rm -f "$backup"' EXIT
+          # Pin client/server major version; Docker host network is CI-local.
+          docker run --rm --network host --env PGPASSWORD postgres:16-alpine \
+            pg_dump --host=127.0.0.1 --username=im19_test --dbname=im19_test \
+            --format=custom --no-owner --no-privileges > "$backup"
+          test -s "$backup"
+          docker run --rm --network host --env PGPASSWORD postgres:16-alpine \
+            psql --host=127.0.0.1 --username=im19_test --dbname=postgres \
+            --set=ON_ERROR_STOP=on --command="CREATE DATABASE im19_restore"
+          # Keep container stdin open: pg_restore reads the backup from stdin.
+          docker run --rm -i --network host --env PGPASSWORD postgres:16-alpine \
+            pg_restore --host=127.0.0.1 --username=im19_test --dbname=im19_restore \
+            --no-owner --no-privileges --exit-on-error < "$backup"
+          python - <<'PY'
+          import os
+          from sqlalchemy.engine import make_url
+          from im19_mcp.readiness import database_ready
+          from im19_mcp.storage import Vault
+
+          # Use SQLAlchemy's URL parser: a string replacement would change
+          # the username too because "/im19_test" occurs in the authority.
+          restore_url = make_url(os.environ["IM19_DATABASE_URL"]).set(
+              database="im19_restore"
+          ).render_as_string(hide_password=False)
+          v = Vault(
+              restore_url,
+              encryption_key=os.environ["IM19_INTEGRATION_FERNET_KEY"],
+              audit_salt="synthetic-backup-salt",
+          )
+          assert database_ready(v.engine), "Restored schema not ready"
+          grant = v.get_credential("ci-restore-probe", "youtube")
+          assert grant is not None and grant[1]["access_token"] == (
+              "CI-SYNTHETIC-NEVER-PRODUCTION"
+          ), "Restored encrypted credential not decryptable"
+          print("Ephemeral PostgreSQL backup and encrypted restore: PASS")
+          PY
       - name: Verify SQL transactions and worker contention
         run: python -m pytest -q tests/integration/test_postgres_governance.py

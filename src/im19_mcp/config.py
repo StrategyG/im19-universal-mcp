@@ -33,6 +33,7 @@ class Settings:
     bind_host: str = "127.0.0.1"
     port: int = 8000
     deployment_environment: str = "production"
+    vault_previous_keys: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -52,6 +53,11 @@ class Settings:
             bind_host=os.getenv("IM19_BIND_HOST", "127.0.0.1"),
             port=int(os.getenv("IM19_PORT", "8000")),
             deployment_environment=os.getenv("IM19_DEPLOYMENT_ENV", "production"),
+            vault_previous_keys=tuple(
+                part.strip()
+                for part in os.getenv("IM19_FERNET_PREVIOUS_KEYS", "").split(",")
+                if part.strip()
+            ),
         )
 
     def google_enabled(self) -> bool:
@@ -76,7 +82,16 @@ class Settings:
             raise ValueError("invalid_port")
         if self.deployment_environment not in {"development", "staging", "production"}:
             raise ValueError("invalid_deployment_environment")
+        if self.vault_previous_keys and (
+            self.vault_key in self.vault_previous_keys
+            or len(set(self.vault_previous_keys)) != len(self.vault_previous_keys)
+        ):
+            raise ValueError("duplicate_encryption_keys_forbidden")
         if self.deployment_environment == "production":
+            # This implementation requires an OFFLINE full rewrap. Production
+            # gateways run primary-only after the migration and validation.
+            if self.vault_previous_keys:
+                raise ValueError("production_legacy_key_fallback_forbidden")
             if not self.database_url.startswith("postgresql+psycopg://"):
                 raise ValueError("production_requires_postgresql")
             if self.dev_subject:

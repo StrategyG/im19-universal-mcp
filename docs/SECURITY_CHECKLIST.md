@@ -15,17 +15,22 @@
 - [x] MCP access token issuer, audience, expiry, scope checked via introspection.
 - [x] No provider mutation tools exposed.
 - [x] Multi-user store keys and sanitized audit event schema.
-- [ ] Rotate encryption keys via managed KMS.
+- [x] Offline MultiFernet rotation covers encrypted credentials, PKCE states and pending links; transaction rollback, primary-only verification tested.
+- [x] Production gateway forbids legacy fallback decryption keys.
+- [ ] Deploy managed KMS/HSM key custody, tested backup-key retention and scheduled human-approved rotation workflows.
 - [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
 - [x] Backend approval ledger: expiring one-time token, exact subject/provider/account/action/resource/payload scope, and transactional idempotency receipts.
 - [x] PostgreSQL CI concurrency checks for approvals and idempotency uniqueness.
 - [ ] Independently authenticated human approval portal, authoritative approver roles and persisted evidence validation.
 - [ ] Write-adapter orchestration, provider reconciliation after uncertain outcomes and live acceptance tests.
-- [ ] Distributed HTTP ingress rate limiting and identity-based quotas.
+- [x] PostgreSQL-backed fixed-window per-socket-peer and verified MCP subject quotas, atomically enforced across worker pools; failure denies requests.
+- [x] Rate quota row pseudonymization and scheduled-cleanup command (deployment of scheduler still pending).
+- [ ] Trusted HTTPS ingress real-client/WAF rate limits, distributed abuse protection, operational quota dashboards and latency/load testing.
 - [x] Production configuration refuses SQLite, weak audit salt and development subject identities.
-- [x] Database readiness endpoint denies readiness on unavailable/outdated schema.
+- [x] Database readiness endpoint denies readiness on unavailable/outdated schema (revision 0005 includes shared rate quota table).
 - [x] Database refresh locking with expiring owner leases (load testing still needed).
-- [ ] Complete backup, DR and pen-test exercises.
+- [x] Disposable PostgreSQL CI smoke test of encrypted synthetic pg_dump/pg_restore and schema readiness.
+- [ ] Production backup retention, PITR/restore drill, KMS historical key recovery, RPO/RTO acceptance, and external penetration test.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
 - [ ] Google restricted-scope verification/security assessment before public Drive content access.
 - [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).

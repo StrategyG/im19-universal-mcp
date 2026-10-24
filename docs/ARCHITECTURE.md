@@ -19,6 +19,8 @@ IM19 Remote MCP (MCP resource server /mcp, issuer + aud + scopes verified)
    |    +-- browser displays confirmation code -> authenticated MCP user confirms
    +-- encrypted provider credential vault -> PostgreSQL
    +-- DB refresh leases with stale-worker ownership checks
+   +-- PostgreSQL atomic rate windows (HMAC socket peer and verified subject)
+   |    +-- HTTP 429/503 and MCP RATE_LIMITED/SERVICE_UNAVAILABLE
    +-- audit store (pseudonymous subject, action, timestamp, status)
    +-- Google OAuth flow --> Google consent + token + userinfo
    +-- YouTube read-only connector --> official YouTube Data/Analytics APIs
@@ -39,7 +41,8 @@ MCP authorization issuer.
 - youtube.py — fixed-host, read-only official Google APIs, sanitized provider error classes.
 - drive.py — metadata search, folder listing and bounded opt-in text reads from fixed Drive v3 endpoints.
 - server.py — tool discovery, consent URL, verified-user confirmation, status, protected YouTube/Drive tools.
-- gateway.py — OAuth bearer introspection for remote HTTP; public health and OAuth callback only.
+- gateway.py — OAuth bearer introspection for remote HTTP; public health and OAuth callback only; fail-closed database-backed socket-peer rate limiter in production.
+- distributed_quota.py — atomic shared PostgreSQL fixed-window quotas with pseudonymous keys and expiry cleanup; MCP tool quotas use only a verified OAuth subject.
 
 ## Operational boundaries
 

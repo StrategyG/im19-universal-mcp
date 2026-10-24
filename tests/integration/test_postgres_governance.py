@@ -97,3 +97,118 @@ def test_postgres_unique_idempotency_rejects_two_distinct_approvals():
         assert len(session.execute(select(MutationReceipt).where(
             MutationReceipt.subject == identity,
         )).scalars().all()) == 1
+
+
+def test_postgres_atomic_offline_key_rotation_covers_all_sensitive_tables():
+    """Real PostgreSQL transaction: old-key ciphertext is rewrapped in one pass."""
+    import time
+    from cryptography.fernet import Fernet, InvalidToken
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    old_key = os.environ["IM19_INTEGRATION_FERNET_KEY"]
+    new_key = Fernet.generate_key().decode()
+    suffix = secrets.token_hex(12)
+    old = Vault(url, encryption_key=old_key, audit_salt="ci-test-salt")
+    old.put_credential(
+        suffix, "drive", "google-account-mock",
+        {"access_token": "simulated-secret"}, time.time() + 900,
+    )
+    state = f"ci-oauth-{suffix}"
+    old.create_state(state, suffix, ("openid",), "mock-verifier", time.time() + 100)
+    claim = old.stage_link(
+        suffix, "youtube", "google-account-mock",
+        {"access_token": "simulated-pending-token"}, time.time() + 900,
+    )
+
+    rotating = Vault(url, encryption_key=new_key, previous_keys=(old_key,))
+    assert rotating.get_credential(suffix, "drive") is not None
+    # Rotation is an OFFLINE operation. This disposable CI DB has no writers
+    # while rotating, and contains no real credentials or customer data.
+    counts = rotating.rotate_encryption(offline_maintenance_ack=True)
+    assert counts["oauth_credentials"] >= 1
+    assert counts["oauth_states"] >= 1
+    assert counts["oauth_pending_links"] >= 1
+
+    primary = Vault(url, encryption_key=new_key)
+    assert primary.verify_primary_key_coverage() == counts
+    assert primary.get_credential(suffix, "drive")[1]["access_token"] == "simulated-secret"
+    assert primary.consume_state(state)[-1] == "mock-verifier"
+    assert primary.confirm_link(suffix, "youtube", claim)[1]["access_token"] == (
+        "simulated-pending-token"
+    )
+    with pytest.raises(InvalidToken):
+        old.get_credential(suffix, "drive")
+
+
+def test_postgres_shared_quota_across_parallel_gateway_workers():
+    """Atomic shared limit holds on PostgreSQL 16 under concurrent requests."""
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota, RateWindow
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    # Simulate distinct gateway instances with separate connection pools.
+    replicas = [
+        DistributedQuota(create_engine(url, pool_pre_ping=True), secret="ci-rate-salt-123456")
+        for _ in range(4)
+    ]
+    identity = secrets.token_hex(16)
+    now = 1_610_000_001
+    limit = 10
+
+    def request(i: int) -> bool:
+        return replicas[i % len(replicas)].consume(
+            "http:peer", identity, limit=limit, now=now
+        )[0]
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(request, range(40)))
+    assert sum(outcomes) == limit
+    digest = replicas[0]._digest("http:peer", identity, 60)
+    with replicas[0].sessions() as session:
+        records = session.execute(select(RateWindow).where(
+            RateWindow.key_digest == digest,
+        )).scalars().all()
+        assert len(records) == 1
+        assert records[0].hits == limit
+        assert identity not in records[0].key_digest
+    for replica in replicas:
+        replica.engine.dispose()
+
+
+def test_postgres_shared_quota_subject_isolation_and_retention():
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    limiter = DistributedQuota(create_engine(url), secret="ci-rate-salt-123456")
+    try:
+        subject = secrets.token_hex(16)
+        now = 1_700_000_000
+        assert limiter.consume("mcp:provider-reads", subject, limit=1, now=now)[0]
+        assert not limiter.consume("mcp:provider-reads", subject, limit=1, now=now)[0]
+        assert limiter.consume("mcp:oauth-begin", subject, limit=1, now=now)[0]
+        assert limiter.consume("mcp:provider-reads", subject + "-2", limit=1, now=now)[0]
+        # A shared ledger maintenance job can remove expired windows safely.
+        assert limiter.purge_expired(now=now + 100_000) >= 3
+    finally:
+        limiter.engine.dispose()
+
+
+def test_postgres_quota_accepts_64bit_expiration_after_2038():
+    from sqlalchemy import create_engine
+    from im19_mcp.distributed_quota import DistributedQuota, RateWindow
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    quota = DistributedQuota(create_engine(url), secret="ci-rate-salt-123456")
+    try:
+        subject = secrets.token_hex(16)
+        year_2046 = 2_400_000_000
+        assert quota.consume("http:peer", subject, limit=1, now=year_2046)[0]
+        digest = quota._digest("http:peer", subject, 60)
+        with quota.sessions() as session:
+            row = session.execute(
+                select(RateWindow).where(RateWindow.key_digest == digest)
+            ).scalar_one()
+            assert row.expires_at > 2**31 - 1
+    finally:
+        quota.engine.dispose()

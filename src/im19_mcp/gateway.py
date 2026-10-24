@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
+from sqlalchemy import create_engine
 from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
@@ -22,7 +23,8 @@ from starlette.responses import JSONResponse
 
 from im19_mcp.config import Settings
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError
-from im19_mcp.rate_limit import RateLimitMiddleware
+from im19_mcp.distributed_quota import DistributedQuota
+from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddleware
 from im19_mcp.readiness import database_ready
 from im19_mcp.server import register_tools
 from im19_mcp.storage import Vault
@@ -73,10 +75,15 @@ class IntrospectionVerifier(TokenVerifier):
         )
 
 
-def create_gateway(settings: Settings | None = None) -> MCPServer:
+def create_gateway(
+    settings: Settings | None = None, *, quota: DistributedQuota | None = None,
+) -> MCPServer:
     cfg = settings or Settings.from_env()
     cfg.require_remote()
-    vault = Vault(cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt)
+    vault = Vault(
+        cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt,
+        previous_keys=cfg.vault_previous_keys,
+    )
     # Database schema must be created through an explicit migration/bootstrap step.
     oauth = GoogleOAuth(cfg, vault) if cfg.google_enabled() else None
     server = MCPServer(
@@ -89,7 +96,13 @@ def create_gateway(settings: Settings | None = None) -> MCPServer:
             validate_token_resource=True,
         ),
     )
-    register_tools(server, settings=cfg, vault=vault, oauth=oauth)
+    effective_quota = (
+        quota if quota is not None else
+        DistributedQuota(vault.engine, secret=cfg.audit_salt)
+        if cfg.deployment_environment == "production" else None
+    )
+    register_tools(server, settings=cfg, vault=vault, oauth=oauth,
+                   distributed_quota=effective_quota)
 
     @server.custom_route("/health", methods=["GET"])
     async def health(_: Request) -> JSONResponse:
@@ -151,11 +164,24 @@ def create_app(settings: Settings | None = None):
     host = urlsplit(cfg.mcp_resource).hostname
     if not host:
         raise ValueError("resource_hostname_required")
-    app = create_gateway(cfg).streamable_http_app(
+    # Production quotas share the same PostgreSQL ledger across HTTP and
+    # verified-user tool invocations. A separate SQLAlchemy pool handles HTTP
+    # admission while MCP provider storage owns its own pool.
+    quota = (
+        DistributedQuota(create_engine(cfg.database_url, pool_pre_ping=True),
+                         secret=cfg.audit_salt)
+        if cfg.deployment_environment == "production" else None
+    )
+    app = create_gateway(cfg, quota=quota).streamable_http_app(
         transport_security=TransportSecuritySettings(allowed_hosts=[host]),
         max_request_body_size=1_048_576,
     )
-    app.add_middleware(RateLimitMiddleware, requests_per_minute=120, max_clients=4096)
+    if quota is not None:
+        app.add_middleware(DistributedRateLimitMiddleware, quota=quota,
+                           requests_per_minute=120)
+    else:
+        app.add_middleware(RateLimitMiddleware, requests_per_minute=120,
+                           max_clients=4096)
     return app
 
 
