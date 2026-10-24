@@ -147,7 +147,7 @@ async def test_readiness_503_without_db_schema_and_200_after_revision(cfg, tmp_p
                 "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
             ))
             connection.execute(text(
-                "INSERT INTO alembic_version (version_num) VALUES ('0004_governance')"
+                "INSERT INTO alembic_version (version_num) VALUES ('0005_distributed_quotas')"
             ))
         engine.dispose()
 
