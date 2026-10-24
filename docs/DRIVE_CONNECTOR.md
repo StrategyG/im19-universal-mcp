@@ -24,8 +24,11 @@ To enable file-content reading for a connected account, explicitly invoke:
 
 `request_service_authorization(service="drive", include_content=True)`.
 
-Google may require restricted-scope OAuth verification and independent
-security assessment for applications that store or transmit such data. A
+**Both** `drive.metadata.readonly` and `drive.readonly` are classified by
+Google as *restricted scopes*. The metadata scope is narrower in capability,
+but still requires appropriate restricted-scope verification in public apps.
+Security assessment obligations depend on storage/transmission and Google's
+policy requirements. Do not treat metadata-only default as non-sensitive. A
 metadata-only grant cannot be used to read file contents, even though a
 file appears in search results.
 
