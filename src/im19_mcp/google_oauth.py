@@ -9,7 +9,7 @@ import base64
 import hashlib
 import secrets
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
 import httpx
 
@@ -162,9 +162,14 @@ class GoogleOAuth:
         token = data.get("refresh_token") or data.get("access_token")
         if token:
             try:
-                await self._post(REVOKE_URL, {"token": token})
-            except OAuthError:
-                raise OAuthError("google_revocation_failed_no_local_disconnect")
+                if self.client is not None:
+                    response = await self.client.post(REVOKE_URL, data={"token": token})
+                else:
+                    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                        response = await client.post(REVOKE_URL, data={"token": token})
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise OAuthError("google_revocation_failed_no_local_disconnect") from exc
         removed = self.vault.delete_credential(subject, "youtube")
         self.vault.audit(subject, "youtube", "oauth.disconnect", "SUCCESS")
         return removed
