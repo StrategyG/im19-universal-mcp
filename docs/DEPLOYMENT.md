@@ -28,11 +28,11 @@ args, untrusted PR jobs or model-visible tool input.
 ```bash
 # With a trusted staging DB URL in IM19_DATABASE_URL:
 alembic upgrade head
-# Expected current revision: 0003_refresh_leases
+# Expected current revision: 0004_governance
 ```
 
-The migrations create state, pending-account confirmation and credential
-refresh lease tables. **Existing databases must run all unapplied migrations
+The migrations create state, pending-account confirmation, credential refresh
+lease, one-time governance approval, and mutation idempotency receipt tables. **Existing databases must run all unapplied migrations
 before upgrading the service**. `im19-init-db` is for local development only.
 
 ## 3. Docker Compose test environment
@@ -49,7 +49,15 @@ docker compose up -d gateway
 Migration files and Alembic are included in the runtime Docker image. Do
 not expose port 8000 to the public internet: it is loopback-bound on the host.
 Put an HTTPS reverse proxy in front and explicitly configure trusted host,
-Origin and query-string access log redaction.
+Origin and query-string access log redaction. Use `/health` for process liveness;
+use `/ready` to check live DB connectivity and Alembic revision
+`0004_governance`. A 503 response must prevent instance registration.
+
+Remote gateway config defaults to strict `production` validation even if
+`IM19_DEPLOYMENT_ENV` is omitted. For development only, explicitly set
+`IM19_DEPLOYMENT_ENV=staging` or `development`. Production requires
+PostgreSQL, strong audit salt, no development subject, and a same-origin
+HTTPS Google callback if the Google connector is configured.
 
 The Google callback request contains OAuth `code` and `state` URL parameters.
 Uvicorn HTTP access logging is disabled in the bundled entrypoint, but
@@ -82,8 +90,8 @@ im19-purge-expired
 # Or with the container: docker compose run --rm gateway im19-purge-expired
 ```
 
-It only returns deletion counts. Expired staged Google credentials and OAuth
-states otherwise remain encrypted in the database after their logical TTL;
+It only returns deletion counts. Expired staged Google credentials, OAuth
+states and unused governance approvals otherwise remain in the database after their logical TTL;
 logical expiry alone is not a retention policy. A production scheduler, job
 monitoring and operational alarm must be configured separately.
 
@@ -94,8 +102,15 @@ monitoring and operational alarm must be configured separately.
   initiation and callback. The one-time code is only a safer interim fallback.
 - Live identity-provider integration, Google test-account connections,
   end-to-end ChatGPT tool invocation, OAuth provider review where necessary.
+- Independently authenticated human approval portal, approver role checks and
+  future provider write-adapter reconciliation (read-only MCP stays enabled).
 - Managed KMS / encryption key rotation, backup/restore drills, reliable
   audit/log retention and central distributed ingress rate limiting.
 - Penetration test, incident response runbook and per-tenant access audit.
+
+Use `python -m pytest -q` for unit/mock tests. In CI, the separate
+`IM19 PostgreSQL Integration` workflow launches a disposable PostgreSQL 16
+container, upgrades all migrations, and tests real concurrent approval
+transactions without any production credentials. This is NOT a load test.
 
 No production deployment, provider login, or ChatGPT connection is claimed.
