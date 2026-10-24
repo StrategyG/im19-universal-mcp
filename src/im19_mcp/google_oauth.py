@@ -187,24 +187,58 @@ class GoogleOAuth:
             raise OAuthError("SCOPE_REQUIRED")
         if expires > time.time() + 60:
             return account_id, data["access_token"]
-        refresh = data.get("refresh_token")
-        if not refresh:
-            raise OAuthError("AUTH_REQUIRED")
-        updated = await self._post(TOKEN_URL, {
-            "client_id": self.settings.google_client_id,
-            "client_secret": self.settings.google_client_secret,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh,
-        })
-        access = updated.get("access_token")
-        duration = updated.get("expires_in")
-        if not isinstance(access, str) or not isinstance(duration, (int, float)) or duration <= 0:
-            raise OAuthError("AUTH_REQUIRED")
-        fresh = {"access_token": access,
-                 "refresh_token": updated.get("refresh_token") or refresh,
-                 "scopes": data["scopes"]}
-        self.vault.put_credential(subject, service, account_id, fresh, time.time() + duration)
-        return account_id, access
+
+        # A DB-backed lease prevents concurrent refresh requests across workers.
+        # Recheck the credential under the lease: another request might have
+        # refreshed the token since the first read.
+        lease_owner = secrets.token_urlsafe(24)
+        locked = self.vault.acquire_refresh_lease(
+            subject, service, lease_owner, now=time.time(), lease_seconds=30,
+        )
+        if locked is None:
+            raise OAuthError("REFRESH_IN_PROGRESS")
+        try:
+            locked_account, data, locked_expiry = locked
+            if locked_expiry > time.time() + 60:
+                if not required_scopes.issubset(set(data.get("scopes", []))):
+                    raise OAuthError("SCOPE_REQUIRED")
+                return locked_account, data["access_token"]
+            if not required_scopes.issubset(set(data.get("scopes", []))):
+                raise OAuthError("SCOPE_REQUIRED")
+            refresh = data.get("refresh_token")
+            if not refresh:
+                raise OAuthError("AUTH_REQUIRED")
+            updated = await self._post(TOKEN_URL, {
+                "client_id": self.settings.google_client_id,
+                "client_secret": self.settings.google_client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+            })
+            access = updated.get("access_token")
+            duration = updated.get("expires_in")
+            if not isinstance(access, str) or not isinstance(duration, (int, float)) or duration <= 0:
+                raise OAuthError("AUTH_REQUIRED")
+            granted_value = updated.get("scope")
+            granted = set(data.get("scopes", []))
+            if granted_value is not None:
+                if not isinstance(granted_value, str):
+                    raise OAuthError("SCOPE_REQUIRED")
+                granted = set(granted_value.split())
+            if not required_scopes.issubset(granted):
+                raise OAuthError("SCOPE_REQUIRED")
+            fresh = {
+                "access_token": access,
+                "refresh_token": updated.get("refresh_token") or refresh,
+                "scopes": sorted(granted),
+            }
+            if not self.vault.complete_refresh(
+                subject, service, lease_owner, locked_account, fresh,
+                time.time() + duration,
+            ):
+                raise OAuthError("REFRESH_SUPERSEDED")
+            return locked_account, access
+        finally:
+            self.vault.release_refresh_lease(subject, service, lease_owner)
 
     async def disconnect(self, subject: str, *, service: str = "youtube") -> bool:
         """Only call from a separately authorized human confirmation endpoint."""
