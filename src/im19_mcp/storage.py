@@ -281,6 +281,28 @@ class Vault:
             session.delete(row)
             return True
 
+    def purge_expired(self, *, now: float | None = None) -> dict[str, int]:
+        """Delete obsolete OAuth transactions and encrypted pending credentials.
+
+        Call from a scheduled *trusted backend* task, never via public MCP.
+        Encrypted pending tokens otherwise remain in the database past TTL.
+        """
+        cutoff = time.time() if now is None else now
+        with self.sessions.begin() as session:
+            states = session.execute(
+                delete(PendingState).where(PendingState.expires_at <= cutoff)
+            )
+            links = session.execute(
+                delete(PendingLink).where(
+                    (PendingLink.expires_at <= cutoff) |
+                    (PendingLink.token_expires_at <= cutoff)
+                )
+            )
+            return {
+                "oauth_states": max(int(states.rowcount or 0), 0),
+                "oauth_pending_links": max(int(links.rowcount or 0), 0),
+            }
+
     def audit(self, subject: str, service: str, action: str, status: str) -> None:
         pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()
         with self.sessions.begin() as session:
