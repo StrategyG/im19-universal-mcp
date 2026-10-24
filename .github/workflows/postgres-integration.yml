@@ -80,7 +80,8 @@ jobs:
           docker run --rm --network host --env PGPASSWORD postgres:16-alpine \
             psql --host=127.0.0.1 --username=im19_test --dbname=postgres \
             --set=ON_ERROR_STOP=on --command="CREATE DATABASE im19_restore"
-          docker run --rm --network host --env PGPASSWORD postgres:16-alpine \
+          # Keep container stdin open: pg_restore reads the backup from stdin.
+          docker run --rm -i --network host --env PGPASSWORD postgres:16-alpine \
             pg_restore --host=127.0.0.1 --username=im19_test --dbname=im19_restore \
             --no-owner --no-privileges --exit-on-error < "$backup"
           python - <<'PY'
