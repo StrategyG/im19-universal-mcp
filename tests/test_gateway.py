@@ -116,3 +116,36 @@ async def test_google_callback_only_stages_secret_and_protects_browser_response(
             assert dup.status_code == 400
             assert dup.json()["status"] == "OAUTH_FAILED"
             assert complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_readiness_503_without_db_schema_and_200_after_revision(cfg, tmp_path):
+    from cryptography.fernet import Fernet
+    from sqlalchemy import create_engine, text
+
+    db = "sqlite:///" + str(tmp_path / "gateway-ready.sqlite3")
+    configured = replace(cfg, database_url=db, vault_key=Fernet.generate_key().decode())
+    app = create_app(configured)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://mcp.test",
+    ) as client:
+        health = await client.get("/health")
+        assert health.status_code == 200
+        initial = await client.get("/ready")
+        assert initial.status_code == 503
+        assert initial.json() == {"status": "unavailable"}
+        assert initial.headers["Cache-Control"] == "no-store"
+
+        engine = create_engine(db)
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+            ))
+            connection.execute(text(
+                "INSERT INTO alembic_version (version_num) VALUES ('0004_governance')"
+            ))
+        engine.dispose()
+
+        ready = await client.get("/ready")
+        assert ready.status_code == 200
+        assert ready.json() == {"status": "ready"}
