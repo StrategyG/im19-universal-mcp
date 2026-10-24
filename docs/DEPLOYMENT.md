@@ -120,4 +120,12 @@ Use `python -m pytest -q` for unit/mock tests. In CI, the separate
 container, upgrades all migrations, and tests real concurrent approval
 transactions without any production credentials. This is NOT a load test.
 
+The CI job also performs a `pg_dump`/`pg_restore` round trip on a
+**disposable PostgreSQL 16 database** and confirms that its migrated schema
+is ready and one **synthetic encrypted OAuth credential** is decryptable
+after restore. This is a limited smoke test only; it does **not** establish
+production RPO/RTO, point-in-time recovery, offsite backup retention,
+separated administrator permissions, disaster failover, or backup encryption
+key escrow.
+
 No production deployment, provider login, or ChatGPT connection is claimed.
