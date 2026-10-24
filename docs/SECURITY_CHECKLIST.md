@@ -15,7 +15,9 @@
 - [x] MCP access token issuer, audience, expiry, scope checked via introspection.
 - [x] No provider mutation tools exposed.
 - [x] Multi-user store keys and sanitized audit event schema.
-- [ ] Rotate encryption keys via managed KMS.
+- [x] Offline MultiFernet rotation covers encrypted credentials, PKCE states and pending links; transaction rollback, primary-only verification tested.
+- [x] Production gateway forbids legacy fallback decryption keys.
+- [ ] Deploy managed KMS/HSM key custody, tested backup-key retention and scheduled human-approved rotation workflows.
 - [ ] Verify production authorization server + end-to-end ChatGPT OAuth.
 - [x] Backend approval ledger: expiring one-time token, exact subject/provider/account/action/resource/payload scope, and transactional idempotency receipts.
 - [x] PostgreSQL CI concurrency checks for approvals and idempotency uniqueness.
