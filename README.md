@@ -41,6 +41,28 @@ im19-mcp
 
 Local `stdio` mode requires no Google credentials for tool discovery. If `IM19_DEV_SUBJECT` is set, it represents a **trusted local-development identity only**; remote mode never uses it.
 
+## GitHub Codespaces + Codex development runtime
+
+Codespaces now has a Python 3.12 + Node.js 22 development container that
+installs IM19 automatically and verifies a **real local MCP stdio subprocess**.
+Follow [Codespaces setup and Codex registration](docs/CODESPACES.md).
+
+```bash
+# Codespaces repository terminal, no Google/OAuth credentials required
+bash scripts/codespaces/bootstrap.sh
+.venv/bin/python scripts/codespaces/probe.py
+
+# OPTIONAL, after installing Codex CLI and authenticating interactively
+bash scripts/codespaces/register_codex.sh
+codex mcp list
+```
+
+The registered launcher strips ambient secrets before launching MCP.
+It exposes service metadata and capabilities, but no real Google account or
+ChatGPT remote connection is established. **AUTH_REQUIRED is expected**.
+Codespaces does not operate as a production 24/7 MCP host; never publicly
+forward the IM19 gateway port without an independently verified OAuth issuer
+and secure HTTPS ingress.
 ## Database and controlled staging
 
 ```bash
