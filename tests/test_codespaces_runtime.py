@@ -47,7 +47,7 @@ def test_codespaces_scripts_parse_and_do_not_enable_public_gateway():
     registration = (CODESPACES / "register_codex.sh").read_text(encoding="utf-8")
     assert "codex mcp add im19 -- bash" in registration
     assert "codex mcp get im19" in registration
-    assert "codex mcp remove im19" not in registration
+    assert "\ncodex mcp remove im19" not in registration  # guidance is okay; no auto-remove
 
 
 def test_real_mcp_stdio_probe_with_no_oauth_secrets():
