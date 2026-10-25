@@ -20,5 +20,10 @@
         "ms-python.vscode-pylance"
       ]
     }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
   }
 }
