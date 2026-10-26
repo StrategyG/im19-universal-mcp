@@ -14,3 +14,7 @@ build/
 *.egg-info/
 .coverage
 htmlcov/
+
+
+# Local Codespaces demo credentials and realm import; never commit
+.im19-codespaces/

@@ -29,6 +29,14 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
+## Codespaces plugin connection setup
+
+For an isolated PostgreSQL + Keycloak OAuth test environment, use the
+[Codespaces remote setup](docs/CODESPACES_REMOTE.md). Run `python -m im19_mcp.codespaces up`
+from the repository root after installation. It generates secrets locally, starts
+the services, migrates the DB and checks real issuer login before public exposure.
+This is a demo environment; no production or ChatGPT connectivity is assumed.
+
 ## Development run
 
 ```bash

@@ -1,0 +1,33 @@
+name: IM19 Codespaces OAuth Stack
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  real-keycloak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked runtime
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Start isolated PostgreSQL, Keycloak and gateway
+        run: |
+          python -m im19_mcp.codespaces up \
+            --mcp-origin https://mcp.test --issuer-origin https://identity.test \
+            --mcp-port 18000 --issuer-port 18080
+      - name: Real issuer login, PKCE, code replay and gateway token verification
+        run: python scripts/codespaces/probe_keycloak.py
+      - name: Stop isolated services (preserve volumes until runner deletion)
+        if: always()
+        run: python -m im19_mcp.codespaces down
