@@ -51,7 +51,7 @@ def probe(root: Path) -> None:
     with httpx.Client(transport=Forward(), follow_redirects=False, timeout=15) as client:
         metadata = client.get(issuer + '/.well-known/openid-configuration').json()
         assert metadata['issuer'] == issuer
-        assert metadata.get('authorization_response_iss_parameter_supported') is True
+        assert metadata.get('authorization_response_iss_parameter_supported') is True, 'issuer_identification_missing'
         login = client.get(metadata['authorization_endpoint'], params={
             'client_id': connection['client_id'], 'response_type': 'code',
             'redirect_uri': settings['callback'], 'scope': 'openid profile email im19:read', 'state': nonce,

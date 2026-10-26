@@ -28,6 +28,27 @@ jobs:
             --mcp-port 18000 --issuer-port 18080
       - name: Real issuer login, PKCE, code replay and gateway token verification
         run: python scripts/codespaces/probe_keycloak.py
+      - name: Redacted synthetic CI diagnostics
+        if: failure()
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          root = Path('.im19-codespaces')
+          data = (root / 'setup.log').read_text() if (root / 'setup.log').exists() else ''
+          env = {k:v for k,v in os.environ.items() if not k.startswith(('IM19_', 'KC_')) and k != 'POSTGRES_PASSWORD'}
+          result = subprocess.run(['docker', 'compose', '--env-file', str(root / 'stack.env'), '-f', str(root / 'compose.json'),
+                                   'logs', '--no-color', '--tail', '60', 'keycloak', 'gateway'], capture_output=True, text=True, env=env)
+          data += result.stdout + result.stderr
+          values = []
+          if (root / 'connection.json').exists():
+              values += list(json.loads((root / 'connection.json').read_text()).values())
+          if (root / 'stack.env').exists():
+              values += [line.split('=',1)[1] for line in (root / 'stack.env').read_text().splitlines() if '=' in line]
+          for value in sorted((v for v in values if isinstance(v,str) and len(v)>8), key=len, reverse=True):
+              data = data.replace(value, '[REDACTED]')
+          print(data[-16000:])
+          PY
       - name: Stop isolated services (preserve volumes until runner deletion)
         if: always()
         run: python -m im19_mcp.codespaces down

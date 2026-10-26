@@ -194,11 +194,15 @@ def compose(root: Path, *args) -> None:
     # No shell; executable resolved once and subcommands supplied by trusted CLI code.
     result = subprocess.run([executable, 'compose', '--env-file', str(directory / 'stack.env'),  # nosec B603
         '-f', str(directory / 'compose.json'), *args], cwd=root,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         env={key: value for key, value in os.environ.items()
              if not key.startswith(('IM19_', 'KC_')) and key not in {
                  'POSTGRES_PASSWORD', 'COMPOSE_PROJECT_NAME', 'COMPOSE_PROFILES'}})
     if result.returncode:
+        log = directory / 'setup.log'
+        with log.open('w') as handle:
+            os.chmod(log, 0o600)
+            handle.write(result.stdout + '\n' + result.stderr)
         raise RuntimeError('docker_compose_failed_check_Docker_and_local_container_logs')
 
 
@@ -242,6 +246,7 @@ def main(argv=None) -> int:
     root = Path.cwd().resolve()
     if not (root / 'Dockerfile').is_file():
         parser.error('run_from_repository_root')
+    phase = 'configuration'
     try:
         if args.action in {'configure', 'up'}:
             if bool(args.mcp_origin) != bool(args.issuer_origin):
@@ -251,14 +256,26 @@ def main(argv=None) -> int:
         else:
             settings = json.loads((root / STATE / 'settings.json').read_text())
         if args.action == 'up':
+            phase = 'start_database_and_issuer'
+            print('Starting isolated PostgreSQL and Keycloak...', flush=True)
             compose(root, 'up', '-d', '--build', 'postgres', 'keycloak')
+            compose(root, 'up', '-d', '--wait', '--wait-timeout', '120', 'postgres')
+            phase = 'build_gateway'
+            print('Building gateway...', flush=True)
             compose(root, 'build', 'gateway')
+            phase = 'migrations'
             compose(root, 'run', '--rm', '--no-deps', 'gateway', 'alembic', 'upgrade', 'head')
+            phase = 'remote_doctor'
             compose(root, 'run', '--rm', '--no-deps', 'gateway', 'im19-mcp-doctor', '--mode', 'remote', '--check-database')
+            phase = 'gateway_start'
             compose(root, 'up', '-d', 'gateway')
+            phase = 'local_readiness'
+            print('Checking database and issuer readiness...', flush=True)
             local_checks(settings)
             # Execute the checkout's synthetic browser-login probe before asking
             # the operator to expose either authenticated endpoint.
+            phase = 'oauth_login_probe'
+            print('Testing real OAuth login and PKCE...', flush=True)
             probe = runpy.run_path(str(root / 'scripts/codespaces/probe_keycloak.py'))['probe']
             probe(root)
         elif args.action == 'down':
@@ -271,8 +288,11 @@ def main(argv=None) -> int:
             'public_access_verified': args.action == 'verify-public',
             'chatgpt_connected_verified': False, 'production_acceptance': False}))
         return 0
-    except (OSError, ValueError, RuntimeError, AssertionError, httpx.HTTPError):
-        print(json.dumps({'status': 'SETUP_FAILED', 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
+    except (OSError, ValueError, RuntimeError, AssertionError, httpx.HTTPError) as exc:
+        controlled = {'login_page_unavailable', 'login_form_missing', 'login_not_completed',
+                      'code_exchange_failed', 'code_replay_not_rejected', 'issuer_identification_missing'}
+        reason = str(exc) if isinstance(exc, AssertionError) and str(exc) in controlled else type(exc).__name__
+        print(json.dumps({'status': 'SETUP_FAILED', 'phase': phase, 'reason': reason, 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
         return 1
 
 
