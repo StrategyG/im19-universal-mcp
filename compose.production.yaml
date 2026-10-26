@@ -1,0 +1,7 @@
+# Use with compose.yaml after provisioning secrets and migrating PostgreSQL.
+services:
+  gateway:
+    environment:
+      IM19_DEPLOYMENT_ENV: production
+      IM19_DEV_SUBJECT: ""
+      IM19_FERNET_PREVIOUS_KEYS: ""

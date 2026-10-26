@@ -60,7 +60,7 @@ def test_canonical_payload_hash_key_order_invariant():
 
 @pytest.mark.parametrize("payload", [
     float("nan"), ["one"], {"bad": float("nan")}, {"huge": "x" * 70000},
-    {1: "nonstring"},
+    {1: "nonstring"}, {"nested": {1: "nonstring"}}, {"nested": [{1: "nonstring"}]},
 ])
 def test_noncanonical_or_excessive_payload_fails(payload):
     with pytest.raises(ValueError):
@@ -190,3 +190,4 @@ def test_audit_does_not_contain_sensitive_payload(ledger):
         {k: getattr(event, k) for k in ("subject_pseudonym", "service", "action", "status", "request_id")}
         for event in events
     ])
+

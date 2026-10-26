@@ -5,6 +5,8 @@ from datetime import date
 
 import httpx
 
+from im19_mcp.outbound import ResponseTooLarge, request_json
+
 DATA_URL = "https://www.googleapis.com/youtube/v3"
 ANALYTICS_URL = "https://youtubeanalytics.googleapis.com/v2/reports"
 
@@ -24,21 +26,17 @@ class YouTubeClient:
         if not (url.startswith(DATA_URL + "/") or url == ANALYTICS_URL):
             raise ValueError("provider_url_not_allowlisted")
         try:
-            if self._client is not None:
-                response = await self._client.get(url, params=params,
-                    headers={"Authorization": f"Bearer {self._token}"})
-            else:
-                async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
-                    response = await client.get(url, params=params,
-                        headers={"Authorization": f"Bearer {self._token}"})
-            response.raise_for_status()
-            data = response.json()
+            data = await request_json("GET", url, client=self._client, params=params,
+                                      max_bytes=512 * 1024, timeout=12,
+                                      headers={"Authorization": f"Bearer {self._token}"})
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             reason = "AUTH_REQUIRED" if status == 401 else (
                 "SCOPE_REQUIRED" if status == 403 else (
                     "RATE_LIMITED" if status == 429 else "PROVIDER_ERROR"))
             raise ProviderError(reason) from exc
+        except ResponseTooLarge as exc:
+            raise ProviderError("RESPONSE_SIZE_LIMIT_EXCEEDED") from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise ProviderError("PROVIDER_UNAVAILABLE_OR_INVALID_RESPONSE") from exc
         if not isinstance(data, dict):
@@ -76,3 +74,4 @@ class YouTubeClient:
             "metrics": "views,estimatedMinutesWatched,subscribersGained", "dimensions": "day",
             "sort": "day",
         })
+

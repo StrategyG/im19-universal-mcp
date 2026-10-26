@@ -73,6 +73,7 @@ GitHub Actions additionally provisions a **disposable PostgreSQL 16 service**,
 runs all Alembic migrations, and tests concurrent reservations and unique
 idempotency enforcement using real database transactions. This is not a
 production workload test and does not validate any external provider mutation.
-OAuth browser-session binding, operational KMS/key rotation, ingress quotas,
+Live acceptance of browser-bound OAuth, operational key custody/rotation, ingress quotas,
 monitoring, disaster recovery, and live ChatGPT login remain unresolved.
 No external writes have been enabled.
+

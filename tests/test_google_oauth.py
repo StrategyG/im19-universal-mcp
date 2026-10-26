@@ -157,3 +157,14 @@ async def test_google_drive_oauth_stored_in_independent_service_vault(cfg, vault
                 {"https://www.googleapis.com/auth/drive.readonly"},
                 service="drive",
             )
+
+
+@pytest.mark.asyncio
+async def test_production_refuses_stored_credentials_without_browser_proof(cfg, vault):
+    vault.put_credential("user", "drive", "google-account", {
+        "access_token": "legacy-secret", "scopes": ["drive.readonly"],
+    }, time.time() + 3600)
+    auth = GoogleOAuth(cfg, vault, require_browser=True)
+    with pytest.raises(OAuthError, match="AUTH_REQUIRED"):
+        await auth.access_token("user", {"drive.readonly"}, service="drive")
+

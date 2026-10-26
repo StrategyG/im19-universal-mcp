@@ -106,3 +106,28 @@ def test_expired_claims_are_purged_without_exposing_secrets(vault):
     with vault.sessions() as session:
         assert len(session.execute(select(PendingLink)).all()) == 0
         assert len(session.execute(select(PendingState)).all()) == 1
+
+
+def test_activation_rolls_back_claim_and_credential_if_audit_fails(vault, monkeypatch):
+    code = vault.stage_link("user-a", "drive", "google-account", {"access_token": "secret"}, time.time() + 300)
+    original = vault._audit_record
+
+    def broken_audit(*args):
+        raise OSError("synthetic-audit-outage")
+
+    monkeypatch.setattr(vault, "_audit_record", broken_audit)
+    with pytest.raises(OSError):
+        vault.activate_link("user-a", "drive", code)
+    assert vault.get_credential("user-a", "drive") is None
+    monkeypatch.setattr(vault, "_audit_record", original)
+    assert vault.activate_link("user-a", "drive", code)[0] == "google-account"
+    with pytest.raises(PermissionError):
+        vault.activate_link("user-a", "drive", code)
+
+
+def test_production_cannot_activate_a_legacy_claim_without_browser_proof(vault):
+    code = vault.stage_link("user-a", "drive", "google-account", {"access_token": "secret"}, time.time() + 300)
+    with pytest.raises(PermissionError, match="browser_proof_required"):
+        vault.activate_link("user-a", "drive", code, require_browser=True)
+    assert vault.get_credential("user-a", "drive") is None
+

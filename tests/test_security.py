@@ -47,3 +47,12 @@ def test_mutation_needs_exact_approval():
 
 def test_mutation_without_payload_is_denied():
     assert decide(Policy("google", "delete", frozenset(), True)) == Decision.DENY
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), True, -1])
+def test_approval_with_invalid_expiry_is_never_allowed(invalid):
+    from im19_mcp.security import Approval, Decision, Policy, Principal, authorize
+    policy = Policy("drive", "write", frozenset(), mutates=True)
+    principal = Principal("alice", "drive", "account", frozenset())
+    approval = Approval("alice", "drive", "account", "write", "doc", "hash", invalid)
+    assert authorize(policy, principal, subject="alice", account_id="account", now=100,
+                     resource_id="doc", payload_hash="hash", approval=approval) == Decision.DENY

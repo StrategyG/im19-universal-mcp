@@ -2,6 +2,7 @@
 from sqlalchemy import create_engine, text
 
 from im19_mcp.readiness import database_ready
+from im19_mcp.storage import Base
 
 
 def test_uninitialized_database_is_not_ready(tmp_path):
@@ -17,5 +18,11 @@ def test_schema_revision_must_be_exact(tmp_path):
     assert database_ready(engine) is False
     with engine.begin() as conn:
         conn.execute(text("UPDATE alembic_version SET version_num='0005_distributed_quotas'"))
+    assert database_ready(engine) is False  # a marker without tables is insufficient
+    Base.metadata.create_all(engine)
     assert database_ready(engine) is True
     assert database_ready(engine, "unexpected-version") is False
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE oauth_credentials RENAME COLUMN refresh_owner TO missing_owner"))
+    assert database_ready(engine) is False
+

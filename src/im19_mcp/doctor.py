@@ -12,7 +12,8 @@ from importlib.util import find_spec
 from typing import Any
 
 from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
+
+from im19_mcp.database import database_engine
 
 from im19_mcp.config import Settings
 from im19_mcp.readiness import database_ready
@@ -40,7 +41,7 @@ def diagnose(*, mode: str, check_database: bool = False) -> dict[str, Any]:
         checks["database_schema_ready"] = False
         if config is not None and checks["configuration_valid"]:
             try:
-                engine = create_engine(config.database_url, pool_pre_ping=True)
+                engine = database_engine(config.database_url)
                 try:
                     checks["database_schema_ready"] = bool(database_ready(engine))
                 finally:
@@ -72,3 +73,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

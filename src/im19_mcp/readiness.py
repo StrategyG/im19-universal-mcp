@@ -4,7 +4,7 @@ Exposes no DB credentials, schema names, provider tokens or detailed errors.
 """
 from __future__ import annotations
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 REQUIRED_SCHEMA_REVISION = "0005_distributed_quotas"
@@ -17,6 +17,16 @@ def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVI
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one_or_none()
-            return revision == required_revision
+            if revision != required_revision:
+                return False
+            from im19_mcp.storage import Base
+            from im19_mcp.governance import approvals  # noqa: F401
+            from im19_mcp import distributed_quota  # noqa: F401
+
+            # A revision marker alone cannot prove tables/columns are usable.
+            for table in Base.metadata.sorted_tables:
+                connection.execute(select(table).limit(0))
+            return True
     except (SQLAlchemyError, OSError, ValueError):
         return False
+

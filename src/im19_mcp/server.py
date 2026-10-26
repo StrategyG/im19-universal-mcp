@@ -6,22 +6,41 @@ Providers only expose explicitly read-only operations in this phase.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from functools import wraps
+
+from cryptography.fernet import InvalidToken
+from sqlalchemy.exc import SQLAlchemyError
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from starlette.concurrency import run_in_threadpool
 
 from im19_mcp.config import Settings
+from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
 from im19_mcp.drive import DriveClient
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError, SCOPES
 from im19_mcp.registry import SERVICES, list_services
 from im19_mcp.storage import Vault
 from im19_mcp.youtube import ProviderError, YouTubeClient
+
+logger = logging.getLogger(__name__)
+
+
+def backend_guard(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (SQLAlchemyError, InvalidToken, OSError):
+            logger.warning("mcp_storage_unavailable")
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "storage_unavailable"}
+    return guarded
 
 
 def authenticated_subject(*, allow_stdio_dev: bool = False) -> str | None:
@@ -40,15 +59,21 @@ def register_tools(
     provider_factory: Callable[[str], YouTubeClient] = YouTubeClient,
     drive_factory: Callable[[str], DriveClient] = DriveClient,
     distributed_quota: DistributedQuota | None = None,
+    browser_auth=None,
 ) -> None:
     """Register read-only tools. Service credentials stay in the encrypted vault."""
 
     def subject() -> str | None:
         return authenticated_subject(allow_stdio_dev=allow_stdio_dev)
 
-    def audit(user: str, service: str, action: str, status: str) -> None:
-        if vault:
-            vault.audit(user, service, action, status)
+    async def audit(user: str, service: str, action: str, status: str) -> bool:
+        try:
+            if vault:
+                await run_in_threadpool(vault.audit, user, service, action, status)
+            return True
+        except (SQLAlchemyError, InvalidToken, OSError):
+            logger.warning("mcp_audit_unavailable")
+            return False
 
     def tool_quota(user: str, action: str, *, limit: int) -> dict | None:
         """Synchronous tool admission with a verified MCP subject only."""
@@ -113,6 +138,7 @@ def register_tools(
         return response
 
     @server.tool(name="get_connection_status")
+    @backend_guard
     def get_connection_status(service: str) -> dict:
         """Check only this authenticated user's provider connection; no token values."""
         if service not in SERVICES:
@@ -130,6 +156,10 @@ def register_tools(
         found = vault.get_credential(user, service)
         if found is None:
             return {"status": "AUTH_REQUIRED", "service": service}
+        if (settings.deployment_environment == "production" and not allow_stdio_dev and
+                found[1].get("browser_verified") is not True):
+            return {"status": "AUTH_REQUIRED", "service": service,
+                    "reason": "browser_reauthorization_required"}
         return {
             "status": (
                 "CREDENTIAL_STORED_NOT_LIVE_VERIFIED"
@@ -142,6 +172,7 @@ def register_tools(
         }
 
     @server.tool(name="request_service_authorization")
+    @backend_guard
     def request_service_authorization(
         service: str, include_analytics: bool = False, include_content: bool = False
     ) -> dict:
@@ -157,12 +188,18 @@ def register_tools(
         if denied is not None:
             return denied
         try:
+            if browser_auth is not None:
+                return browser_auth.ticket(user, service, analytics=include_analytics,
+                                           include_content=include_content)
+            if settings.deployment_environment == "production" and not allow_stdio_dev:
+                return {"status": "NOT_CONFIGURED", "reason": "authenticated_browser_required"}
             return oauth.begin(user, service=service, analytics=include_analytics,
                               include_content=include_content)
         except (ValueError, PermissionError):
             return {"status": "DENY", "reason": "oauth_request_invalid"}
 
     @server.tool(name="confirm_service_authorization")
+    @backend_guard
     def confirm_service_authorization(service: str, confirmation_code: str) -> dict:
         """Explicitly link a Google account using one-time code from OAuth browser callback.
 
@@ -208,17 +245,23 @@ def register_tools(
             account_id, access = await oauth.access_token(user, required, service=service)
             client = factory(access)
             data = await operation(client)
-            audit(user, service, action, "SUCCESS")
+            if not await audit(user, service, action, "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
             return {"status": "OK", "service": service, "account_id": account_id,
                     "data": data, "source": "provider_api"}
         except OAuthError as exc:
-            audit(user, service, action, "DENY")
+            await audit(user, service, action, "DENY")
             return {"status": str(exc)}
-        except (ProviderError, ValueError) as exc:
-            audit(user, service, action, "ERROR")
+        except ProviderError as exc:
+            await audit(user, service, action, "ERROR")
             return {"status": "ERROR", "error_code": str(exc)}
+        except ValueError:
+            await audit(user, service, action, "ERROR")
+            return {"status": "ERROR", "error_code": "INVALID_ARGUMENT_OR_RESPONSE"}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "storage_unavailable"}
         except Exception:
-            audit(user, service, action, "ERROR")
+            await audit(user, service, action, "ERROR")
             return {"status": "ERROR", "error_code": "UNEXPECTED_BACKEND_ERROR"}
 
     @server.tool(name="youtube_get_channel")
@@ -286,15 +329,19 @@ def create_stdio_server(settings: Settings | None = None) -> MCPServer:
     if vault:
         vault.initialize_schema()
     oauth = GoogleOAuth(cfg, vault) if vault and cfg.google_enabled() else None
-    server = MCPServer("IM19 Universal MCP")
+    server = MCPServer("IM19 Universal MCP", version=__version__)
     register_tools(server, settings=cfg, vault=vault, oauth=oauth, allow_stdio_dev=True)
     return server
 
 
 def main() -> None:
     """Local stdio only. Remote deployment MUST use im19-gateway."""
-    create_stdio_server().run(transport="stdio")
+    server = create_stdio_server()
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    server.run(transport="stdio")
 
 
 if __name__ == "__main__":
     main()
+

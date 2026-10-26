@@ -1,0 +1,12 @@
+[Unit]
+Description=IM19 expired OAuth and quota cleanup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/im19-universal-mcp
+ExecStart=/usr/bin/docker compose -f compose.yaml -f compose.production.yaml run --rm --no-deps gateway im19-purge-expired
+TimeoutStartSec=120
+NoNewPrivileges=yes
+PrivateTmp=yes

@@ -1,3 +1,5 @@
+> Historical 0.2 baseline. Current code and deployment acceptance are tracked in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
 # IM19 — Acceptance Test Report (Phases 1–4, 6–7, offline key lifecycle)
 
 Last evaluated: 2026-10-24 UTC. **This is a test environment report, not
@@ -87,3 +89,4 @@ external write-provider reconciliation and recovery tests. One-time confirmation
 not equivalent to first-party login session binding.
 
 Do not label this system production-ready based on passing mock tests.
+
