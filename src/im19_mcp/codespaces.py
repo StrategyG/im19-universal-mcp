@@ -63,7 +63,9 @@ def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dic
             'protocolMappers': [{
                 'name': 'im19-resource', 'protocol': 'openid-connect',
                 'protocolMapper': 'oidc-audience-mapper',
+                # Keycloak also requires its introspecting client in the audience.
                 'config': {'included.custom.audience': mcp + '/mcp',
+                           'included.client.audience': 'im19-resource',
                            'id.token.claim': 'false', 'access.token.claim': 'true',
                            'introspection.token.claim': 'true'},
             }],
