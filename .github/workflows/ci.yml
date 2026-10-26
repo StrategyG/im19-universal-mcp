@@ -24,6 +24,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: python -m pip install -e ".[dev]"
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Safe diagnostics smoke test
+        run: |
+          im19-mcp-doctor --mode local
+          if im19-mcp-doctor --mode remote; then
+            echo "Unconfigured remote gateway must fail closed" >&2
+            exit 1
+          fi
       - name: Compile
         run: python -m compileall -q src tests
       - name: Lint critical correctness rules

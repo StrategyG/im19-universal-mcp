@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 
 
@@ -34,7 +35,10 @@ def test_notebook_metadata_and_valid_python_source():
 def test_notebook_fails_closed_by_default_and_pins_reviewed_commit():
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
-    assert "e60d8276f6cb0b87b30fb04d0819f788dcad2544" in source
+    assert 'REPO_BRANCH = "main"' in source
+    assert 'PINNED_SHA = "514b0ffdb3cc6c5c4e791547402754786419b6ee"' in source
+    assert "sys.path.insert(0, src_dir)" in source
+    assert 'import im19_mcp' in source
     assert "git" in source and "checkout" in source
     assert "IM19_DEPLOYMENT_ENV" in source
     assert '"development"' in source
@@ -50,3 +54,14 @@ def test_notebook_fails_closed_by_default_and_pins_reviewed_commit():
     assert "ngrok" not in source.lower()
     assert "cloudflared" not in source.lower()
     assert "getpass(" not in source
+
+
+def test_notebook_and_colab_readme_share_pinned_commit():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    sources = "\\n".join("".join(cell["source"]) for cell in notebook["cells"])
+    match = re.search(r'PINNED_SHA = "([0-9a-f]{40})"', sources)
+    assert match is not None
+    readme = (NOTEBOOK.parent / "README.md").read_text(encoding="utf-8")
+    assert match.group(1) in readme
+    assert "/blob/main/colab/" in readme
+    assert "feat/distributed-quotas-v1" not in readme

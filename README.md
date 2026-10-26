@@ -41,6 +41,28 @@ im19-mcp
 
 Local `stdio` mode requires no Google credentials for tool discovery. If `IM19_DEV_SUBJECT` is set, it represents a **trusted local-development identity only**; remote mode never uses it.
 
+## Colab CPU development
+
+Use the [reviewed Colab notebook](colab/IM19_Universal_MCP_Colab.ipynb) and
+[runbook](colab/README.md) for an isolated local stdio smoke test. The notebook
+pins a specific `main` commit and explicitly adds its `src/` directory to
+`sys.path` after editable installation; this prevents a common
+`ModuleNotFoundError: No module named 'im19_mcp'` in an already-running
+notebook kernel. It does **not** establish a live Google/ChatGPT connection.
+
+## Safe deployment preflight
+
+```bash
+im19-mcp-doctor --mode local
+im19-mcp-doctor --mode remote --check-database
+```
+
+The doctor prints a redacted JSON checklist. The remote mode validates required
+authentication/encryption configuration and the Fernet key format. Database
+readiness is tested **only** with `--check-database`, using the configured DB,
+which may open a network connection. Passing the doctor is **not** production
+acceptance and does not prove live Google or ChatGPT connectivity.
+
 ## Database and controlled staging
 
 ```bash
