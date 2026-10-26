@@ -65,7 +65,9 @@ def test_realm_uses_distinct_clients_pkce_and_exact_audience():
         assert 'basic' in client['defaultClientScopes']
         assert client['attributes']['pkce.code.challenge.method'] == 'S256'
         assert client['protocolMappers'][0]['config']['included.custom.audience'] == 'https://mcp.test/mcp'
-        assert client['protocolMappers'][0]['config']['included.client.audience'] == 'im19-resource'
+        assert client['protocolMappers'][1]['config']['included.client.audience'] == 'im19-resource'
+        for mapper in client['protocolMappers']:
+            assert not (mapper['config'].get('included.client.audience') and mapper['config'].get('included.custom.audience'))
     assert clients['im19-browser']['redirectUris'] == ['https://mcp.test/oauth/browser/callback']
     assert clients['im19-chatgpt']['redirectUris'] == ['https://chatgpt.com/connector/oauth/specific_id']
 
