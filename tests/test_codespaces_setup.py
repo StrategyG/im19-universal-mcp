@@ -102,3 +102,16 @@ def test_generated_credentials_are_excluded_from_git_and_docker_context():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert callable(module.probe)
+
+
+def test_cli_failure_reports_phase_without_leaking_backend_messages(tmp_path, monkeypatch, capsys):
+    from im19_mcp.codespaces import main
+    (tmp_path / 'Dockerfile').touch()
+    monkeypatch.chdir(tmp_path)
+    def fail(*args):
+        raise RuntimeError('SYNTHETIC-SECRET-DO-NOT-PRINT')
+    monkeypatch.setattr('im19_mcp.codespaces.compose', fail)
+    assert main(['up', '--mcp-origin', 'https://mcp.test', '--issuer-origin', 'https://identity.test']) == 1
+    output = capsys.readouterr().out
+    assert 'start_database_and_issuer' in output
+    assert 'SYNTHETIC-SECRET-DO-NOT-PRINT' not in output

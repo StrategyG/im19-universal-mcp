@@ -78,11 +78,6 @@ def probe(root: Path) -> None:
                   'code_verifier': pkce, 'resource': values['IM19_MCP_RESOURCE']})
         assert response.status_code == 200, 'code_exchange_failed'
         access = response.json()['access_token']
-        # Code replay cannot mint another token.
-        replay = client.post(metadata['token_endpoint'], auth=(connection['client_id'], connection['client_secret']),
-            data={'grant_type': 'authorization_code', 'code': code, 'redirect_uri': settings['callback'],
-                  'code_verifier': pkce})
-        assert replay.status_code == 400, 'code_replay_not_rejected'
 
     class AsyncForward(httpx.AsyncBaseTransport):
         def __init__(self):
@@ -101,7 +96,7 @@ def probe(root: Path) -> None:
         async def aclose(self):
             await self.wire.aclose()
 
-    async def verify():
+    async def verify(revoked=False):
         cfg = Settings(database_url=values['IM19_DATABASE_URL'], vault_key=values['IM19_FERNET_KEY'],
             audit_salt=values['IM19_AUDIT_SALT'], google_client_id='', google_client_secret='', google_redirect_uri='',
             mcp_issuer=issuer, mcp_resource=values['IM19_MCP_RESOURCE'],
@@ -112,11 +107,22 @@ def probe(root: Path) -> None:
             return real(transport=AsyncForward(), timeout=10)
         with patch('im19_mcp.gateway.httpx.AsyncClient', side_effect=factory):
             identity = await IntrospectionVerifier(cfg).verify_token(access)
-            assert identity and identity.subject and identity.client_id == 'im19-chatgpt'
+            if revoked:
+                assert identity is None, 'replayed_session_token_still_active'
+                return
+            assert identity and identity.subject and identity.client_id == 'im19-chatgpt', 'valid_token_not_verified'
             assert 'im19:read' in identity.scopes
             assert await IntrospectionVerifier(replace(cfg, mcp_resource='https://foreign.test/mcp')).verify_token(access) is None
             assert await IntrospectionVerifier(cfg).verify_token('invalid-synthetic-token') is None
     asyncio.run(verify())
+    # Keycloak invalidates the code's user session after replay. Verify the
+    # valid grant FIRST, then require replay and its old token to be rejected.
+    with httpx.Client(transport=Forward(), follow_redirects=False, timeout=15) as client:
+        replay = client.post(metadata['token_endpoint'], auth=(connection['client_id'], connection['client_secret']),
+            data={'grant_type': 'authorization_code', 'code': code, 'redirect_uri': settings['callback'],
+                  'code_verifier': pkce})
+        assert replay.status_code == 400, 'code_replay_not_rejected'
+    asyncio.run(verify(revoked=True))
     print('PASS: real Keycloak login, PKCE code exchange/replay, issuer, client, scope and audience introspection')
 
 

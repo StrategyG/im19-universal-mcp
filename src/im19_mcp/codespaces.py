@@ -42,12 +42,12 @@ def callback_url(value: str) -> str:
     return value
 
 
-def codespace_origins() -> tuple[str, str]:
+def codespace_origins(mcp_port: int = 8000, issuer_port: int = 8080) -> tuple[str, str]:
     name = os.environ.get('CODESPACE_NAME', '')
     domain = os.environ.get('GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN', 'app.github.dev')
     if not re.fullmatch(r'[a-zA-Z0-9-]+', name) or not re.fullmatch(r'[a-zA-Z0-9.-]+', domain):
         raise ValueError('run_in_codespaces_or_supply_both_https_origins')
-    return f'https://{name}-8000.{domain}', f'https://{name}-8080.{domain}'
+    return f'https://{name}-{mcp_port}.{domain}', f'https://{name}-{issuer_port}.{domain}'
 
 
 def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dict:
@@ -56,7 +56,7 @@ def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dic
             'clientId': name, 'secret': secret, 'enabled': True, 'protocol': 'openid-connect',
             'publicClient': False, 'clientAuthenticatorType': 'client-secret',
             'standardFlowEnabled': bool(redirects), 'directAccessGrantsEnabled': False,
-            'serviceAccountsEnabled': False, 'implicitFlowEnabled': False,
+            'serviceAccountsEnabled': False, 'implicitFlowEnabled': False, 'fullScopeAllowed': False,
             'redirectUris': redirects, 'webOrigins': [], 'defaultClientScopes': ['im19:read', 'profile', 'email'],
             'attributes': {'pkce.code.challenge.method': 'S256',
                            'exclude.issuer.from.auth.response': 'false'},
@@ -251,7 +251,7 @@ def main(argv=None) -> int:
         if args.action in {'configure', 'up'}:
             if bool(args.mcp_origin) != bool(args.issuer_origin):
                 raise ValueError('supply_both_https_origins')
-            mcp, issuer = (args.mcp_origin, args.issuer_origin) if args.mcp_origin else codespace_origins()
+            mcp, issuer = (args.mcp_origin, args.issuer_origin) if args.mcp_origin else codespace_origins(args.mcp_port, args.issuer_port)
             settings = configure(root, mcp, issuer, args.chatgpt_callback, args.mcp_port, args.issuer_port)
         else:
             settings = json.loads((root / STATE / 'settings.json').read_text())
@@ -290,7 +290,8 @@ def main(argv=None) -> int:
         return 0
     except (OSError, ValueError, RuntimeError, AssertionError, httpx.HTTPError) as exc:
         controlled = {'login_page_unavailable', 'login_form_missing', 'login_not_completed',
-                      'code_exchange_failed', 'code_replay_not_rejected', 'issuer_identification_missing'}
+                      'code_exchange_failed', 'code_replay_not_rejected', 'issuer_identification_missing',
+                      'valid_token_not_verified', 'replayed_session_token_still_active'}
         reason = str(exc) if isinstance(exc, AssertionError) and str(exc) in controlled else type(exc).__name__
         print(json.dumps({'status': 'SETUP_FAILED', 'phase': phase, 'reason': reason, 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
         return 1

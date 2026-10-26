@@ -19,7 +19,7 @@ Docker/Compose must be installed and the daemon running. The command derives
 public hostnames from the actual Codespaces environment, creates random secrets
 and an im19 login account, imports distinct introspection/browser/ChatGPT OAuth
 clients, starts the services, migrates the gateway DB, runs the remote doctor,
-checks local readiness, and performs a real synthetic browser login with PKCE,
+waits for PostgreSQL health, checks local readiness, and performs a real synthetic browser login with PKCE,
 code replay rejection and gateway audience/scope/issuer verification. It reports
 failure instead of claiming success if any step fails. First pull/build may take
 several minutes. It does not automatically change port visibility.
@@ -27,7 +27,9 @@ several minutes. It does not automatically change port visibility.
 All local setup state is in `.im19-codespaces/`, ignored by git AND Docker build
 context. The directory is mode 0700 and secret files are 0600. The imported
 realm file is readable inside the container but protected by its private host
-parent. No credentials are printed. Never paste its files into chat, commit them,
+parent. No credentials are printed. A separate random temporary issuer admin account
+(im19-ops) is also recorded in connection.json for controlled local administration.
+It is not the ChatGPT login account. Never paste its files into chat, commit them,
 run `docker compose config` in shared output, or share container environment dumps.
 The helper ignores stale IM19/POSTGRES_PASSWORD shell variables from earlier
 attempts, using its own generated stack.env explicitly.
