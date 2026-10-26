@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import time
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -105,6 +106,22 @@ def probe(root: Path) -> None:
         real = httpx.AsyncClient
         def factory(**kwargs):
             return real(transport=AsyncForward(), timeout=10)
+        if not revoked:
+            async with factory() as client:
+                response = await client.post(cfg.mcp_introspection, data={'token': access},
+                    auth=(cfg.mcp_client_id, cfg.mcp_client_secret))
+                body = response.json()
+                audience = body.get('aud')
+                checks = {'active': body.get('active') is True,
+                    'issuer_matches': body.get('iss') == issuer,
+                    'audience_matches': audience == cfg.mcp_resource or isinstance(audience, list) and cfg.mcp_resource in audience,
+                    'subject_present': bool(body.get('sub')),
+                    'client_matches': body.get('client_id') == 'im19-chatgpt',
+                    'scope_present': 'im19:read' in str(body.get('scope', '')).split(),
+                    'expiry_valid': isinstance(body.get('exp'), (int, float)) and body['exp'] > time.time()}
+                if not all(checks.values()):
+                    print(json.dumps({'token_claim_checks': checks}))
+                    raise AssertionError('token_claim_contract_invalid')
         with patch('im19_mcp.gateway.httpx.AsyncClient', side_effect=factory):
             identity = await IntrospectionVerifier(cfg).verify_token(access)
             if revoked:

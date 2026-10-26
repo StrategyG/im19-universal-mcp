@@ -57,7 +57,7 @@ def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dic
             'publicClient': False, 'clientAuthenticatorType': 'client-secret',
             'standardFlowEnabled': bool(redirects), 'directAccessGrantsEnabled': False,
             'serviceAccountsEnabled': False, 'implicitFlowEnabled': False, 'fullScopeAllowed': False,
-            'redirectUris': redirects, 'webOrigins': [], 'defaultClientScopes': ['im19:read', 'profile', 'email'],
+            'redirectUris': redirects, 'webOrigins': [], 'defaultClientScopes': ['basic', 'im19:read', 'profile', 'email'],
             'attributes': {'pkce.code.challenge.method': 'S256',
                            'exclude.issuer.from.auth.response': 'false'},
             'protocolMappers': [{
@@ -75,7 +75,13 @@ def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dic
         'resetPasswordAllowed': False, 'bruteForceProtected': True, 'failureFactor': 5,
         'waitIncrementSeconds': 60, 'maxFailureWaitSeconds': 900,
         'accessTokenLifespan': 300, 'ssoSessionIdleTimeout': 1800,
-        'clientScopes': [{'name': 'im19:read', 'protocol': 'openid-connect',
+        'clientScopes': [
+            {'name': 'basic', 'protocol': 'openid-connect',
+             'attributes': {'include.in.token.scope': 'false'}, 'protocolMappers': [
+                 {'name': 'sub', 'protocol': 'openid-connect', 'protocolMapper': 'oidc-sub-mapper',
+                  'config': {'access.token.claim': 'true', 'introspection.token.claim': 'true',
+                             'lightweight.claim': 'true'}}]},
+            {'name': 'im19:read', 'protocol': 'openid-connect',
                           'attributes': {'include.in.token.scope': 'true',
                                          'display.on.consent.screen': 'true'}},
             {'name': 'profile', 'protocol': 'openid-connect',
@@ -293,7 +299,7 @@ def main(argv=None) -> int:
     except (OSError, ValueError, RuntimeError, AssertionError, httpx.HTTPError) as exc:
         controlled = {'login_page_unavailable', 'login_form_missing', 'login_not_completed',
                       'code_exchange_failed', 'code_replay_not_rejected', 'issuer_identification_missing',
-                      'valid_token_not_verified', 'replayed_session_token_still_active'}
+                      'valid_token_not_verified', 'replayed_session_token_still_active', 'token_claim_contract_invalid'}
         reason = str(exc) if isinstance(exc, AssertionError) and str(exc) in controlled else type(exc).__name__
         print(json.dumps({'status': 'SETUP_FAILED', 'phase': phase, 'reason': reason, 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
         return 1
