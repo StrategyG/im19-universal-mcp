@@ -36,27 +36,32 @@ provider connection is implied by repository changes.
   without root/capabilities. A strict production Compose override, cleanup timer,
   deployment/rollback instructions and clean-wheel CI checks are provided.
 
+**Code verification: PASS. Deployment acceptance: pending actual environment.**
+
 ## Executed checks
 
 | Check | Evidence/status |
 |---|---|
 | Baseline Python 3.12 suite | PASS: 138 passed; 6 PostgreSQL cases skipped locally |
 | Updated Python 3.12 suite | PASS: 186 passed; 7 PostgreSQL cases reserved for CI |
-| Python 3.11 clean wheel environment | Build, hash-verified install and local doctor PASS; final suite recorded in PR checks |
+| Python 3.11 clean wheel environment | PASS: 186 passed, 7 PostgreSQL cases skipped locally; hash-verified install and local doctor also pass |
 | MCP stdio subprocess and in-process discovery | PASS in unit suite; no provider credentials |
 | HTTP protocol and worker switch | PASS: real ASGI MCP requests across independent apps, separate subjects, invalid bearer rejection |
 | Browser linking | PASS with mocked issuer/Google and real encrypted state; wrong subject/client/cookie and replay denied |
 | Ruff, Bandit, policy mypy, compileall, pip check | PASS locally |
 | pip-audit | No known installed-dependency vulnerabilities; local project itself is not a PyPI vulnerability entry |
 | Distribution build | PASS: sdist and wheel 0.3.0 |
-| Docker build | GitHub Actions required; Docker unavailable in the local executor |
-| PostgreSQL transactions/restore | GitHub Actions required; local disposable server startup blocked by executor UID mapping |
+| Docker build | PASS in [IM19 CI](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40268354199) |
+| PostgreSQL 16 transactions/restore | PASS: 7 integration cases, migrations and encrypted synthetic backup/restore in [PostgreSQL CI](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40268354062) |
 
-GitHub Actions must pass for the exact reviewed head: Python 3.11/3.12,
-Docker build, security/dependency audit and disposable PostgreSQL integration.
-The PostgreSQL workflow applies migrations and performs a synthetic encrypted
-backup/restore smoke test before transaction/concurrency cases. CI evidence
-does not establish production backup recovery, load capacity or live OAuth.
+GitHub Actions passed for implementation commit
+43a4a4e23de349cad7364f3944b891875e57d29d: [Python 3.11/3.12, distribution,
+clean-wheel installation and Docker](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40268354199),
+[security/dependency audit](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40268354080),
+and [PostgreSQL migrations, encrypted backup/restore and concurrency](https://github.com/StrategyG/im19-universal-mcp/actions/runs/40268354062).
+The local executor could not start PostgreSQL under its UID mapping; actual
+PostgreSQL evidence comes from the disposable CI service. These checks do not
+establish production backup recovery, load capacity or live OAuth.
 
 ## Deployment acceptance still required
 
