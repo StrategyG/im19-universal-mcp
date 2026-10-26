@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 
 def _https_url(value: str, name: str, *, allow_loopback: bool = False) -> str:
+    if any(char.isspace() or ord(char) < 32 for char in value):
+        raise ValueError(f"{name}: invalid URL")
     url = urlsplit(value)
     localhost = url.hostname in {"127.0.0.1", "localhost", "::1"}
-    if not url.hostname or url.username or url.password or url.fragment:
+    if not url.hostname or url.username or url.password or url.fragment or url.query:
+        raise ValueError(f"{name}: invalid URL")
+    try:
+        port = url.port
+    except ValueError:
+        raise ValueError(f"{name}: invalid URL") from None
+    if port is not None and not 1 <= port <= 65535:
         raise ValueError(f"{name}: invalid URL")
     if url.scheme != "https" and not (allow_loopback and localhost and url.scheme == "http"):
         raise ValueError(f"{name}: HTTPS required")
@@ -18,22 +26,26 @@ def _https_url(value: str, name: str, *, allow_loopback: bool = False) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str
-    vault_key: str
-    audit_salt: str
+    database_url: str = field(repr=False)
+    vault_key: str = field(repr=False)
+    audit_salt: str = field(repr=False)
     google_client_id: str
-    google_client_secret: str
+    google_client_secret: str = field(repr=False)
     google_redirect_uri: str
     mcp_issuer: str
     mcp_resource: str
     mcp_introspection: str
     mcp_client_id: str
-    mcp_client_secret: str
+    mcp_client_secret: str = field(repr=False)
     dev_subject: str
     bind_host: str = "127.0.0.1"
     port: int = 8000
     deployment_environment: str = "production"
-    vault_previous_keys: tuple[str, ...] = ()
+    vault_previous_keys: tuple[str, ...] = field(default=(), repr=False)
+    browser_authorization: str = ""
+    browser_token: str = ""
+    browser_client_id: str = ""
+    browser_client_secret: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,7 +70,15 @@ class Settings:
                 for part in os.getenv("IM19_FERNET_PREVIOUS_KEYS", "").split(",")
                 if part.strip()
             ),
+            browser_authorization=os.getenv("IM19_BROWSER_AUTHORIZATION", ""),
+            browser_token=os.getenv("IM19_BROWSER_TOKEN", ""),
+            browser_client_id=os.getenv("IM19_BROWSER_CLIENT_ID", ""),
+            browser_client_secret=os.getenv("IM19_BROWSER_CLIENT_SECRET", ""),
         )
+
+    def browser_enabled(self) -> bool:
+        return all((self.browser_authorization, self.browser_token,
+                    self.browser_client_id, self.browser_client_secret))
 
     def google_enabled(self) -> bool:
         values = (self.google_client_id, self.google_client_secret, self.google_redirect_uri, self.vault_key)
@@ -82,6 +102,13 @@ class Settings:
             raise ValueError("invalid_port")
         if self.deployment_environment not in {"development", "staging", "production"}:
             raise ValueError("invalid_deployment_environment")
+        browser_fields = (self.browser_authorization, self.browser_token,
+                          self.browser_client_id, self.browser_client_secret)
+        if any(browser_fields):
+            if not self.browser_enabled():
+                raise ValueError("browser_oauth_configuration_incomplete")
+            _https_url(self.browser_authorization, "IM19_BROWSER_AUTHORIZATION")
+            _https_url(self.browser_token, "IM19_BROWSER_TOKEN")
         if self.vault_previous_keys and (
             self.vault_key in self.vault_previous_keys
             or len(set(self.vault_previous_keys)) != len(self.vault_previous_keys)
@@ -114,3 +141,6 @@ class Settings:
                     or callback.query
                 ):
                     raise ValueError("production_google_callback_origin_mismatch")
+                if not self.browser_enabled():
+                    raise ValueError("production_requires_authenticated_browser_linking")
+

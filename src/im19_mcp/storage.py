@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, MultiFernet
 from cryptography.fernet import InvalidToken
-from sqlalchemy import Float, Integer, String, Text, create_engine, delete, select, update
+from sqlalchemy import Float, Integer, String, Text, delete, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+
+from im19_mcp.database import database_engine
 
 
 class Base(DeclarativeBase):
@@ -90,10 +92,12 @@ class Vault:
         except (ValueError, UnicodeEncodeError) as exc:
             raise ValueError("fernet_key_invalid") from exc
         self.audit_salt = audit_salt.encode("utf-8")
-        self.engine = create_engine(database_url, pool_pre_ping=True)
+        self.engine = database_engine(database_url)
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize_schema(self) -> None:
+        if self.engine.dialect.name != "sqlite":
+            raise PermissionError("local_schema_bootstrap_requires_sqlite_use_alembic")
         # Import optional governance models before local-dev create_all.
         # Production schema changes still require explicit Alembic migrations.
         from im19_mcp.governance import approvals  # noqa: F401
@@ -102,7 +106,7 @@ class Vault:
         Base.metadata.create_all(self.engine)
 
     def encrypt(self, value: object) -> str:
-        return self.cipher.encrypt(json.dumps(value, separators=(",", ":")).encode("utf-8")).decode("ascii")
+        return self.cipher.encrypt(json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8")).decode("ascii")
 
     def decrypt(self, ciphertext: str) -> object:
         return json.loads(self.cipher.decrypt(ciphertext.encode("ascii")))
@@ -169,26 +173,34 @@ class Vault:
 
     def create_state(
         self, state: str, subject: str, scopes: tuple[str, ...], verifier: str,
-        expires: float, *, service: str = "youtube"
+        expires: float, *, service: str = "youtube", browser_hash: str = "",
+        purpose: str = "google",
     ) -> None:
         """Create an opaque state bound to an MCP principal and provider service."""
         if service not in {"youtube", "drive"} or not subject or not verifier:
             raise ValueError("oauth_state_binding_invalid")
+        if purpose not in {"google", "browser-ticket", "browser-login"}:
+            raise ValueError("oauth_state_purpose_invalid")
         hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
         with self.sessions.begin() as session:
             session.add(PendingState(
                 state_hash=hashed, subject=subject,
-                scopes_json=json.dumps({"scopes": scopes, "service": service}),
+                scopes_json=json.dumps({"scopes": scopes, "service": service,
+                                       "browser_hash": browser_hash, "purpose": purpose}),
                 verifier_ciphertext=self.encrypt(verifier), expires_at=expires,
             ))
 
-    def consume_state(self, state: str) -> tuple[str, str, tuple[str, ...], str]:
+    def consume_state(self, state: str, *, browser_hash: str = "",
+                      purpose: str = "google") -> tuple[str, str, tuple[str, ...], str]:
         """Atomically remove state; concurrent callbacks cannot redeem it twice.
 
         DELETE RETURNING is supported by PostgreSQL and modern SQLite (>=3.35).
         Expired states remain consumed, including on the denial path.
         """
-        hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
+        try:
+            hashed = hashlib.sha256(state.encode("ascii")).hexdigest()
+        except UnicodeError:
+            raise PermissionError("oauth_state_invalid") from None
         stmt = (
             delete(PendingState)
             .where(PendingState.state_hash == hashed)
@@ -206,6 +218,9 @@ class Vault:
         binding = json.loads(row.scopes_json)
         if not isinstance(binding, dict) or binding.get("service") not in {"youtube", "drive"}:
             raise PermissionError("oauth_state_binding_invalid")
+        if (binding.get("purpose", "google") != purpose or
+                not hmac.compare_digest(binding.get("browser_hash", ""), browser_hash)):
+            raise PermissionError("oauth_browser_binding_invalid")
         scopes = binding.get("scopes")
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise PermissionError("oauth_state_scope_invalid")
@@ -262,18 +277,58 @@ class Vault:
     def put_credential(self, subject: str, service: str, account_id: str, token: dict, expires: float) -> None:
         ciphertext = self.encrypt(token)
         with self.sessions.begin() as session:
-            row = session.get(Credential, (subject, service))
-            if row is None:
-                row = Credential(subject=subject, service=service, token_ciphertext=ciphertext,
-                                 account_id=account_id, expires_at=expires)
-                session.add(row)
-            if row.account_id != account_id:
-                raise PermissionError("account_rebind_requires_disconnect")
-            row.token_ciphertext = ciphertext
-            row.expires_at = expires
-            # A newly confirmed authorization invalidates any stale refresh worker.
-            row.refresh_owner = ""
-            row.refresh_until = 0.0
+            self._put_credential(session, subject, service, account_id, ciphertext, expires)
+
+    def _put_credential(self, session, subject, service, account_id, ciphertext, expires):
+        # First-time concurrent confirmations must obey the same no-rebind
+        # rule as updates. A SELECT followed by INSERT is insufficient.
+        if self.engine.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        elif self.engine.dialect.name == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+        else:
+            raise ValueError("unsupported_vault_database")
+        values = {"subject": subject, "service": service, "account_id": account_id,
+                  "token_ciphertext": ciphertext, "expires_at": expires,
+                  "refresh_owner": "", "refresh_until": 0.0}
+        stmt = insert(Credential).values(**values).on_conflict_do_update(
+            index_elements=[Credential.subject, Credential.service],
+            set_={key: value for key, value in values.items() if key not in {"subject", "service"}},
+            where=Credential.account_id == account_id,
+        ).returning(Credential.account_id)
+        if session.execute(stmt).scalar_one_or_none() is None:
+            raise PermissionError("account_rebind_requires_disconnect")
+
+    def activate_link(self, subject: str, service: str, code: str, *,
+                      require_browser: bool = False) -> tuple[str, dict, float]:
+        """Claim consumption, no-rebind activation and success audit commit together."""
+        if not isinstance(code, str) or not 20 <= len(code) <= 256:
+            raise PermissionError("confirmation_invalid_or_expired")
+        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        with self.sessions.begin() as session:
+            row = session.execute(
+                delete(PendingLink).where(PendingLink.confirmation_hash == digest,
+                    PendingLink.subject == subject, PendingLink.service == service)
+                .returning(PendingLink.account_id, PendingLink.token_ciphertext,
+                           PendingLink.token_expires_at, PendingLink.expires_at)
+            ).one_or_none()
+            if row is None or min(row.expires_at, row.token_expires_at) <= time.time():
+                result = None
+            else:
+                data = self.decrypt(row.token_ciphertext)
+                if not isinstance(data, dict):
+                    raise PermissionError("confirmation_invalid_or_expired")
+                if require_browser and data.get("browser_verified") is not True:
+                    raise PermissionError("browser_proof_required")
+                self._put_credential(session, subject, service, row.account_id,
+                                     row.token_ciphertext, row.token_expires_at)
+                session.add(self._audit_record(subject, service, "oauth.confirm", "SUCCESS"))
+                result = (row.account_id, data, row.token_expires_at)
+        # Invalid/expired claims remain consumed, but a transaction failure
+        # leaves a valid claim retriable and no half-activated credential.
+        if result is None:
+            raise PermissionError("confirmation_invalid_or_expired")
+        return result
 
     def acquire_refresh_lease(
         self, subject: str, service: str, owner: str, *,
@@ -386,10 +441,14 @@ class Vault:
             }
 
     def audit(self, subject: str, service: str, action: str, status: str) -> None:
-        pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()
         with self.sessions.begin() as session:
-            session.add(AuditEvent(
+            session.add(self._audit_record(subject, service, action, status))
+
+    def _audit_record(self, subject: str, service: str, action: str, status: str) -> AuditEvent:
+        pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()
+        return AuditEvent(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 subject_pseudonym=pseudonym, service=service, action=action,
                 status=status, request_id=secrets.token_hex(16),
-            ))
+            )
+

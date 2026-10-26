@@ -21,7 +21,9 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      IM19_DATABASE_URL: "postgresql+psycopg://im19:${POSTGRES_PASSWORD}@postgres:5432/im19"
+      # Supply a complete SQLAlchemy URL; do not interpolate an unescaped
+      # password into a URL (reserved characters change its meaning).
+      IM19_DATABASE_URL: "${IM19_DATABASE_URL:?set IM19_DATABASE_URL with a URL-encoded password}"
       IM19_BIND_HOST: 0.0.0.0
     # A trusted TLS reverse proxy must front this service. Do not expose publicly.
     ports:
@@ -29,5 +31,17 @@ services:
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 2
+    init: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
   pgdata:
+

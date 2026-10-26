@@ -1,4 +1,4 @@
-# IM19 — Architecture Design Document (Phase 1–4 + OAuth hardening)
+# IM19 0.3.0 — Read-only gateway architecture
 
 ## Mission
 A single provider-neutral MCP integration gateway, not a substitute for the
@@ -15,7 +15,8 @@ ChatGPT (OAuth client)
 IM19 Remote MCP (MCP resource server /mcp, issuer + aud + scopes verified)
    |   verified subject only; never user_id from tool args
    +-- MCP tool registry
-   +-- one-time OAuth state + encrypted pending link claim -> PostgreSQL
+   +-- first-party browser PKCE login -> same-subject/client introspection
+   +-- browser/purpose-bound one-time OAuth state + pending link claim -> PostgreSQL
    |    +-- browser displays confirmation code -> authenticated MCP user confirms
    +-- encrypted provider credential vault -> PostgreSQL
    +-- DB refresh leases with stale-worker ownership checks
@@ -41,6 +42,10 @@ MCP authorization issuer.
 - youtube.py — fixed-host, read-only official Google APIs, sanitized provider error classes.
 - drive.py — metadata search, folder listing and bounded opt-in text reads from fixed Drive v3 endpoints.
 - server.py — tool discovery, consent URL, verified-user confirmation, status, protected YouTube/Drive tools.
+- browser_auth.py — dedicated browser-client Authorization Code + PKCE and exact issuer-verified subject/client matching before Google consent.
+- outbound.py — bounded streaming reads, total deadlines and strict JSON parsing.
+- database.py — PostgreSQL connection/statement/lock/pool deadlines.
+- http_security.py — host/origin validation and protective headers on all routes.
 - gateway.py — OAuth bearer introspection for remote HTTP; public health and OAuth callback only; fail-closed database-backed socket-peer rate limiter in production.
 - distributed_quota.py — atomic shared PostgreSQL fixed-window quotas with pseudonymous keys and expiry cleanup; MCP tool quotas use only a verified OAuth subject.
 
@@ -52,15 +57,16 @@ MCP authorization issuer.
 - OAuth callback is public but state is random, service-bound, time-bound, server-stored
   and atomically single-use. Browser callback stages encrypted credentials but cannot
   connect an account: the same authenticated MCP principal must explicitly redeem a
-  short-lived confirmation code. Independent browser-session binding is still
-  required for a production account portal.
+  short-lived confirmation code. Production additionally requires first-party browser
+  proof at the MCP issuer and binds both callbacks to the same Secure HttpOnly cookie.
 - Exposing /mcp to ChatGPT requires an independent OAuth provider capable of MCP resource binding.
 - No provider writes, email sends, uploads, deletes or repository changes are exposed.
 
 ## Deferred architectural controls
 
-Before production: long-running refresh lease load testing; key rotation; full
-provider webhook integration; post-disconnect revocation status tracking;
-OIDC session binding and account-selection UX; deployment monitoring and
-alerts; retention/privacy policy; managed KMS/HSM; stronger app gateway rate
-limits; multi-tenant penetration tests; evidence-backed failover drills.
+Deployment acceptance: real issuer/Google/ChatGPT authentication, representative
+load tests, monitored cleanup, ingress/client quotas, backup/key recovery, privacy
+retention and incident response. See PRODUCTION_READINESS.md. Webhooks, provider
+write adapters, write-approval UI and richer account management are separate future
+features and are not advertised as implemented by this read-only gateway.
+

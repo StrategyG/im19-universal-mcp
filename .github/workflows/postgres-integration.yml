@@ -40,7 +40,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install project and test requirements
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install -e ".[dev]"
       - name: Generate job-only Fernet key
         run: |
           python - <<'PY'
@@ -118,3 +120,4 @@ jobs:
           PY
       - name: Verify SQL transactions and worker contention
         run: python -m pytest -q tests/integration/test_postgres_governance.py
+

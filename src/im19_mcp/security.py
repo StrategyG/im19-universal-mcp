@@ -60,6 +60,9 @@ def authorize(
             return Decision.DENY
         if approval is None:
             return Decision.APPROVAL_REQUIRED
+        if any(not isinstance(value, (int, float)) or isinstance(value, bool) or
+               not 0 <= value <= 253402300799 for value in (now, approval.expires_at)):
+            return Decision.DENY
         exact = (
             approval.subject, approval.provider, approval.account_id,
             approval.action, approval.resource_id, approval.payload_hash,
@@ -68,3 +71,4 @@ def authorize(
         if exact != requested or approval.expires_at <= now:
             return Decision.DENY
     return Decision.ALLOW
+

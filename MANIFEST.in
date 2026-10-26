@@ -1,0 +1,5 @@
+include requirements.lock alembic.ini Dockerfile compose*.yaml .env.example
+recursive-include migrations *.py
+recursive-include docs *.md
+recursive-include deploy *.service *.timer
+recursive-include tests *.py

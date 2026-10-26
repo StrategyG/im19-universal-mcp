@@ -212,3 +212,40 @@ def test_postgres_quota_accepts_64bit_expiration_after_2038():
             assert row.expires_at > 2**31 - 1
     finally:
         quota.engine.dispose()
+
+
+def test_postgres_competing_first_links_never_rebind_an_account():
+    import time
+    from im19_mcp.storage import AuditEvent
+
+    url = os.environ["IM19_INTEGRATION_DB_URL"]
+    workers = [Vault(url, encryption_key=os.environ["IM19_INTEGRATION_FERNET_KEY"],
+                     audit_salt="synthetic-confirmation-salt") for _ in range(2)]
+    subject = secrets.token_hex(16)
+    codes = [workers[i].stage_link(subject, "drive", f"account-{i}",
+             {"access_token": "synthetic", "browser_verified": True}, time.time() + 300) for i in range(2)]
+
+    def confirm(i):
+        try:
+            workers[i].activate_link(subject, "drive", codes[i], require_browser=True)
+            return "CONNECTED"
+        except PermissionError:
+            return "DENIED"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(confirm, range(2)))
+        assert outcomes.count("CONNECTED") == 1
+        assert outcomes.count("DENIED") == 1
+        winner = outcomes.index("CONNECTED")
+        assert workers[0].get_credential(subject, "drive")[0] == f"account-{winner}"
+        pseudonym = workers[0]._audit_record(subject, "drive", "oauth.confirm", "SUCCESS").subject_pseudonym
+        with workers[0].sessions() as session:
+            records = session.execute(select(AuditEvent).where(
+                AuditEvent.subject_pseudonym == pseudonym, AuditEvent.action == "oauth.confirm",
+            )).scalars().all()
+            assert len(records) == 1
+    finally:
+        for worker in workers:
+            worker.engine.dispose()
+

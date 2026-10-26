@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "im19-universal-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "IM19 Institutional Universal MCP — secure-by-default integration platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=2.0.1,<3.0.0",
+  "mcp>=2.3.0,<3.0.0",
   "httpx>=0.28,<1.0",
   "cryptography>=50.0.2,<51",
   "sqlalchemy>=2.0,<3.0",
@@ -35,6 +35,7 @@ im19-purge-expired = "im19_mcp.cli:purge_expired"
 im19-rotate-keys = "im19_mcp.cli:rotate_keys"
 im19-verify-primary-key = "im19_mcp.cli:verify_primary_key"
 im19-mcp-doctor = "im19_mcp.doctor:main"
+im19-healthcheck = "im19_mcp.healthcheck:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -53,3 +54,4 @@ line-length = 120
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
+

@@ -1,136 +1,106 @@
-# IM19 deployment — controlled staging ONLY
+# IM19 0.3.0 deployment runbook
 
-## 1. Local prerequisites
+This runbook targets the read-only gateway. Code validation and acceptance of a
+particular deployment are separate; record both in PRODUCTION_READINESS.md.
 
-Python 3.11+, official MCP SDK, current PostgreSQL, and a reverse proxy for
-HTTPS. Staging uses a **separate** MCP OAuth/OIDC issuer and Google OAuth app.
-GitHub Actions is CI, not a persistent hosting service.
+## Provision the environment
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-python -m pytest -q
-im19-mcp
-```
+Use Python 3.11/3.12 or the supplied Python 3.12 container, PostgreSQL 16, a
+trusted HTTPS reverse proxy, and a production secret manager. Set a unique
+Fernet key and independent random audit salt (at least 32 characters). Keep
+IM19_DEV_SUBJECT and IM19_FERNET_PREVIOUS_KEYS empty in production.
 
-With no verified OAuth principal (and no deliberate `IM19_DEV_SUBJECT`),
-provider tools fail closed with `AUTH_REQUIRED`. Do NOT configure
-`IM19_DEV_SUBJECT` for a publicly accessible MCP process.
+Provision the MCP authorization server with:
 
-## 2. Database schema and secrets
+- A canonical issuer, token introspection endpoint and resource audience equal
+  to the exact IM19_MCP_RESOURCE, for example https://mcp.example.com/mcp.
+- ChatGPT/client discovery and Authorization Code + PKCE support as required
+  by that client; the gateway itself is a resource server, not an issuer.
+- A server-side introspection client in IM19_MCP_CLIENT_ID/SECRET.
+- A dedicated confidential browser client in IM19_BROWSER_CLIENT_ID/SECRET.
+  Register exactly https://mcp.example.com/oauth/browser/callback. Configure
+  its authorization and token endpoints. It must issue im19:read access tokens
+  for the same resource and expose the same stable sub through introspection.
+  Token exchange uses HTTP Basic client authentication and resource indicators.
 
-Provision a managed PostgreSQL database, application credentials with least
-privilege, an independent random `IM19_FERNET_KEY`, and random
-`IM19_AUDIT_SALT`. If the Fernet key must change, follow the [offline
-key rotation runbook](KEY_ROTATION.md), including a verified backup, stopping
-all writers, passing an explicit maintenance acknowledgment, and confirming
-primary-only decryption before service restart. Never leave
-`IM19_FERNET_PREVIOUS_KEYS` configured in a production gateway. Do not commit real `.env` or persist credentials in build
-args, untrusted PR jobs or model-visible tool input.
+For Google, register https://mcp.example.com/oauth/google/callback, configure
+its separate Web application credentials and enable only the required APIs.
+Production refuses Google linking without complete browser-client settings.
+If Google is disabled, clear all Google and browser settings rather than
+leaving partially configured credentials.
 
-```bash
-# With a trusted staging DB URL in IM19_DATABASE_URL:
-alembic upgrade head
-# Expected current revision: 0005_distributed_quotas
-```
+IM19_DATABASE_URL must contain the actual database host and a percent-encoded
+password. POSTGRES_PASSWORD for the bundled database must represent that same
+password. Compose does not concatenate an unescaped password into a URL.
+Never print populated Compose configuration, environment dumps or secrets in
+CI or support conversations.
 
-The migrations create state, pending-account confirmation, credential refresh
-lease, one-time governance approval, mutation idempotency receipt and distributed
-rate-window tables. **Existing databases must run all unapplied migrations
-before upgrading the service**. `im19-init-db` is for local development only.
-
-## 3. Docker Compose test environment
+## Build, migrate and start
 
 ```bash
-# Configure .env from .env.example with secure, independently provisioned values.
-export POSTGRES_PASSWORD='set-a-unique-long-staging-secret'
-docker compose build
-docker compose up -d postgres
-docker compose run --rm gateway alembic upgrade head
-docker compose up -d gateway
+# Secrets must already be available to Compose via the protected environment.
+docker compose -f compose.yaml -f compose.production.yaml build
+docker compose -f compose.yaml -f compose.production.yaml up -d postgres
+docker compose -f compose.yaml -f compose.production.yaml run --rm gateway alembic upgrade head
+docker compose -f compose.yaml -f compose.production.yaml run --rm gateway im19-mcp-doctor --mode remote --check-database
+docker compose -f compose.yaml -f compose.production.yaml up -d gateway
 ```
 
-Migration files and Alembic are included in the runtime Docker image. Do
-not expose port 8000 to the public internet: it is loopback-bound on the host.
-Put an HTTPS reverse proxy in front and explicitly configure trusted host,
-Origin and query-string access log redaction. Use `/health` for process liveness;
-use `/ready` to check live DB connectivity and Alembic revision
-`0005_distributed_quotas`. A 503 response must prevent instance registration.
+The production override selects strict production validation. Gateway port
+8000 is bound only to host loopback. The container runs as UID 10001 with a
+read-only root filesystem, no capabilities and bounded resources/log rotation.
+The runtime dependency file is version-pinned with package hashes. Recompile
+it deliberately, run the full checks and review its diff before upgrading.
 
-Remote gateway config defaults to strict `production` validation even if
-`IM19_DEPLOYMENT_ENV` is omitted. For development only, explicitly set
-`IM19_DEPLOYMENT_ENV=staging` or `development`. Production requires
-PostgreSQL, strong audit salt, no development subject, and a same-origin
-HTTPS Google callback if the Google connector is configured.
+Use Alembic revision 0005_distributed_quotas. `im19-init-db` refuses non-SQLite
+bootstrap; it cannot replace migrations on PostgreSQL. Readiness checks actual
+tables/columns as well as the revision, and returns 503 on drift or outage.
+Health only establishes process liveness. Configure the proxy/load balancer
+and monitoring to respect readiness; Docker health alone does not restart an
+unhealthy container automatically.
 
-The Google callback request contains OAuth `code` and `state` URL parameters.
-Uvicorn HTTP access logging is disabled in the bundled entrypoint, but
-**reverse proxies/CDNs/load balancers must also avoid logging query strings**
-for `/oauth/google/callback`.
+## Configure ingress and operations
 
-## 4. OAuth & scope acceptance checklist
+Forward the canonical Host, restrict browser origins to the public HTTPS
+origin, terminate TLS, and apply real-client rate limits at the trusted edge.
+Do not trust arbitrary X-Forwarded-For. Gateway quotas see the immediate socket
+peer and can combine users behind the same proxy; size ingress and deployment
+capacity accordingly. The HTTP protocol is stateless, so MCP requests may
+switch between workers sharing the same DB and secret configuration.
 
-1. Confirm independent MCP OAuth issuer, introspection, audience, expiry and
-   scope rejection behavior (invalid tokens must fail closed).
-2. Exercise `request_service_authorization` with a staging user.
-3. Complete Google's consent in a staging browser. Callback MUST return
-   `PENDING_CONFIRMATION`; no usable account may exist yet.
-4. Copy the browser's 5-minute one-time code to the authenticated MCP tool
-   `confirm_service_authorization`. A different user must not be able to
-   redeem it; replay must fail.
-5. Inspect `get_connection_status` and perform only supported read-only
-   provider calls. Verify YouTube and Drive consent separately.
-6. Trigger refresh concurrently across workers; verify the database lease
-   prevents overwrite after disconnect or reauthorization.
-7. Verify distributed `RATE_LIMITED` behavior under multiple PostgreSQL-backed
-   workers. The gateway uses only the immediate socket peer, so put independent
-   **end-client** rate limits at trusted HTTPS ingress and never trust raw
-   X-Forwarded-For headers. Confirm that quota-DB outage returns 503 instead
-   of silently allowing calls. Test restore procedures, scan egress paths,
-   and review all Google's restricted-scope requirements.
+Do not log URL queries on /connect/google, /oauth/browser/callback or
+/oauth/google/callback. The bundled entrypoints disable HTTP access logs and
+HTTPX/httpcore request logs. Apply equivalent redaction at every ingress,
+trace collector and error reporting service. Monitor 401/403/429/503 rates,
+readiness failures, fixed sanitized backend/audit errors, database pool waits,
+quota latency, storage growth and cleanup failures. Define incident owners.
 
-## 5. OAuth retention operations
+Schedule `im19-purge-expired` at least every five minutes in a trusted
+operations context, with the same DB/key/audit configuration. For a container
+host, deploy the supplied systemd service/timer after setting WorkingDirectory
+to the checkout and protecting its environment. Install the units in /etc/systemd/system,
+run systemctl daemon-reload, then systemctl enable --now im19-retention.timer,
+and verify systemctl status im19-retention.timer. Configure alerting on service
+failures. Never expose cleanup as MCP.
+Define separate audit and mutation-evidence retention before production use;
+cleanup intentionally does not erase permanent audit/receipt history.
 
-Schedule the following inside a trusted operations context after migrations:
+Use managed PostgreSQL backups/PITR and segregated key custody. Perform a real
+restore drill with the deployment's keys and record RPO/RTO. Follow KEY_ROTATION.md
+for offline rewrapping; verify primary-only coverage before restarting writers.
 
-```bash
-im19-purge-expired
-# Or with the container: docker compose run --rm gateway im19-purge-expired
-```
+## Acceptance and rollback
 
-It only returns deletion counts. Expired staged Google credentials, OAuth,
-unused governance approvals and shared quota rows otherwise remain in the database after logical TTL;
-logical expiry alone is not a retention policy. A production scheduler, job
-monitoring and operational alarm must be configured separately.
+Before admitting real users, complete the live tests in PRODUCTION_READINESS.md:
+issuer rejects wrong audiences/expired/future tokens, browser subject mismatch
+and replay fail, Google/ChatGPT supported read tools work, and outages/quotas
+fail closed. Use test accounts and record timestamps and redacted evidence.
+Existing 0.2 credentials and pending grants without browser proof require
+reauthorization; production reads cannot reuse them.
 
-## 6. Release gates (NOT YET MET)
-
-- Passing Python 3.11/3.12 CI, Docker build and dependency audit.
-- First-party OIDC **authenticated browser** portal with session-bound link
-  initiation and callback. The one-time code is only a safer interim fallback.
-- Live identity-provider integration, Google test-account connections,
-  end-to-end ChatGPT tool invocation, OAuth provider review where necessary.
-- Independently authenticated human approval portal, approver role checks and
-  future provider write-adapter reconciliation (read-only MCP stays enabled).
-- Manual offline Fernet re-encryption is implemented; managed KMS/HSM custody,
-  verified backup/restore drills and independent key rotation controls remain
-  release gates.
-- Managed monitoring and alerting, reliable audit/log retention, per-client
-  quotas at ingress/WAF, strict reverse-proxy identity validation and load testing.
-- Penetration test, incident response runbook and per-tenant access audit.
-
-Use `python -m pytest -q` for unit/mock tests. In CI, the separate
-`IM19 PostgreSQL Integration` workflow launches a disposable PostgreSQL 16
-container, upgrades all migrations, and tests real concurrent approval
-transactions without any production credentials. This is NOT a load test.
-
-The CI job also performs a `pg_dump`/`pg_restore` round trip on a
-**disposable PostgreSQL 16 database** and confirms that its migrated schema
-is ready and one **synthetic encrypted OAuth credential** is decryptable
-after restore. This is a limited smoke test only; it does **not** establish
-production RPO/RTO, point-in-time recovery, offsite backup retention,
-separated administrator permissions, disaster failover, or backup encryption
-key escrow.
-
-No production deployment, provider login, or ChatGPT connection is claimed.
+Rollback by stopping gateway traffic and restoring the prior tested image,
+configuration and compatible DB backup if needed. This release adds no schema
+migration, but browser-flow JSON purpose bindings and browser-proof credentials
+are a security boundary: do not roll back to an unbound public linking flow.
+Check schema readiness and run smoke tests before reopening traffic. Provider
+writes remain unavailable in this release.

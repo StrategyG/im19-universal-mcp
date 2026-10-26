@@ -1,6 +1,6 @@
 # IM19 Universal MCP — Intelligent Mind 19
 
-**Status:** development implementation of Phase 1 (MCP core), Phase 2 (Google OAuth backend), Phase 3 (YouTube read-only), Phase 4 (Google Drive read-only), and Phase 6 governance *storage primitives*. This project is **not deployed** and no live Google, YouTube or ChatGPT connection has been verified.
+**Status: 0.3.0 release candidate for the read-only gateway.** Includes authenticated browser linking, encrypted provider credentials, shared quotas and transactional audit. See the [production readiness report](docs/PRODUCTION_READINESS.md) for executed checks and remaining deployment acceptance. No live Google, YouTube or ChatGPT connection is claimed.
 
 ## Architecture
 
@@ -9,7 +9,8 @@ ChatGPT (remote OAuth MCP client)
    -> IM19 authenticated Streamable HTTP gateway
       -> MCP tool registry and server-side subject
       -> encrypted OAuth vault (PostgreSQL/SQLAlchemy)
-      -> Google OAuth Authorization Code + PKCE
+      -> first-party browser Authorization Code + PKCE, same-subject proof
+      -> Google OAuth Authorization Code + PKCE, browser-bound callback
       -> official YouTube Data v3 / YouTube Analytics v2 (read-only)
       -> official Google Drive v3 metadata, opt-in text extraction (read-only)
 ```
@@ -33,6 +34,7 @@ Other providers are registered as **not implemented**, not falsely advertised as
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
+python -m pip install --require-hashes -r requirements.lock
 python -m pip install -e '.[dev]'
 python -m pytest -q
 python -m compileall -q src tests
@@ -82,13 +84,15 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - **Offline Fernet key rotation** supports temporary previous-key reads during isolated migration, transactional re-encryption of all credential/PKCE/pending-link records, and primary-only coverage checks. **Production gateways reject old-key fallbacks**; no online rotation or managed KMS is claimed.
 - Access controls deny cross-user/cross-account access and missing provider scopes.
 - The MCP service exposes **no provider mutation tools**. Phase 6 now contains a **database-backed one-time approval + idempotency reservation ledger**, with atomic audit events. **Trusted human portal and actual write adapters remain unimplemented**; they must be independently authenticated before any future write execution.
-- OAuth callback states are bound to a specific provider service, atomically single-use, and expire after 10 minutes.
+- Production linking first authenticates the browser at the configured MCP issuer using a dedicated confidential client, Authorization Code + PKCE, resource-bound token introspection and exact subject/client matching. A secure HttpOnly SameSite cookie binds both callbacks. A ticket alone cannot authenticate a user.
+- OAuth callback states are bound to a specific provider service, purpose and browser, atomically single-use, and expire after 10 minutes.
 - Google callbacks store credentials in an encrypted pending vault, never as a connected account. The user must confirm a one-time code (5-minute TTL) from the browser via the authenticated MCP tool.
 - Database-backed refresh leases and compare-and-set updates mitigate concurrent refresh, disconnect races and token resurrection.
 - `im19-purge-expired` is a trusted maintenance command for expiring unused OAuth states, encrypted pending confirmations, governance approval grants **and pseudonymized rate windows**; schedule it in backend operations, not through MCP.
 - Production gateway applies **PostgreSQL-backed shared quota admission** to ASGI socket peers (120/min), and limits verified MCP subjects before provider reads (60/min) or new Google OAuth consent (5/min). Failed quota DB access returns 503 / SERVICE_UNAVAILABLE; forwarding headers cannot choose a different quota identity. A trusted edge/WAF limiter is still required to distinguish end-user IPs behind reverse proxies.
 - Production remote configuration defaults to fail-closed: PostgreSQL is mandatory, development subjects are forbidden, and OAuth callback configuration and audit salt are validated. Explicitly set `IM19_DEPLOYMENT_ENV=staging` only for controlled staging environments.
-- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity and Alembic revision `0005_distributed_quotas` pass.
+- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity, Alembic revision `0005_distributed_quotas`, and every required table/column pass. Container readiness uses this endpoint.
+- Stateless JSON HTTP transport supports worker switching without per-process MCP session affinity. Host/Origin checks cover all routes. Upstream reads have byte limits and total deadlines; JSON rejects duplicate keys and non-finite values. PostgreSQL connections, statements, locks and pool waits are bounded.
 - Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**. A separate GitHub Actions job tests concurrent approval consumption, idempotency, **shared admission control across independent worker pools**, offline vault encryption key rotation, and a **synthetic encrypted backup/restore smoke test** on a disposable PostgreSQL 16 database. This is not a production disaster-recovery exercise.
@@ -107,4 +111,5 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - [Security checklist](docs/SECURITY_CHECKLIST.md)
 - [Acceptance report](docs/ACCEPTANCE_REPORT.md)
 
-**Do not deploy as production-ready** before completing the unchecked security controls and successfully running live integration and acceptance tests. The current confirmation-code flow is a safer development fallback, **not a substitute for authenticated browser-session binding in production**.
+Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains an internal primitive; provider write adapters and a human write-approval portal are outside this read-only release.
+

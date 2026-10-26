@@ -56,6 +56,25 @@ async def test_mocked_introspection_checks_issuer_audience_scope_and_expiry(cfg,
     assert (result is not None) is allowed
     if allowed:
         assert result.subject == "trusted-subject"
+        assert result.expires_at == int(payload["exp"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", [
+    {"exp": float("nan")}, {"exp": float("inf")}, {"exp": True},
+    {"exp": 10 ** 1000}, {"nbf": time.time() + 3600}, {"nbf": True},
+    {"nbf": float("nan")}, {"sub": "s" * 256}, {"sub": "   "},
+    {"client_id": "c" * 256},
+])
+async def test_invalid_claims_fail_closed_without_raising(cfg, override):
+    import json
+    payload = {"active": True, "iss": cfg.mcp_issuer, "aud": cfg.mcp_resource,
+               "exp": time.time() + 300, "client_id": "client", "sub": "subject", "scope": "im19:read"}
+    payload.update(override)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, content=json.dumps(payload).encode())))
+    with patch("im19_mcp.gateway.httpx.AsyncClient", return_value=client):
+        assert await IntrospectionVerifier(cfg).verify_token("synthetic-token") is None
 
 
 def test_production_config_denies_sqlite_dev_subject_and_weak_salt(cfg):
@@ -151,6 +170,13 @@ async def test_readiness_503_without_db_schema_and_200_after_revision(cfg, tmp_p
             ))
         engine.dispose()
 
+        # Matching revision alone must not report readiness.
+        assert (await client.get("/ready")).status_code == 503
+        from im19_mcp.storage import Base
+        engine = create_engine(db)
+        Base.metadata.create_all(engine)
+        engine.dispose()
+
         ready = await client.get("/ready")
         assert ready.status_code == 200
         assert ready.json() == {"status": "ready"}
@@ -187,3 +213,4 @@ async def test_production_gateway_uses_shared_quota_and_fails_closed_without_dat
         failed = await client.get("/mcp")
         assert failed.status_code == 503
         assert failed.json() == {"error": "QUOTA_UNAVAILABLE"}
+

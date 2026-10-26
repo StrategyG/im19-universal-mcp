@@ -6,13 +6,13 @@ MCP orchestration layer and by Google.
 """
 from __future__ import annotations
 
-import json
 import re
 from urllib.parse import quote
 
 import httpx
 
 from im19_mcp.youtube import ProviderError
+from im19_mcp.outbound import ResponseTooLarge, json_object, request_bytes
 
 DRIVE_URL = "https://www.googleapis.com/drive/v3/files"
 METADATA_FIELDS = "id,name,mimeType,size,modifiedTime,parents,webViewLink,description"
@@ -57,10 +57,9 @@ class DriveClient:
         ):
             raise ValueError("drive_url_not_allowlisted")
         try:
-            if self._client is None:
-                async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
-                    return await self._stream(client, url, params, limit)
-            return await self._stream(self._client, url, params, limit)
+            return await request_bytes("GET", url, client=self._client, params=params,
+                                       max_bytes=limit, timeout=12,
+                                       headers={"Authorization": f"Bearer {self._token}", "Accept": "*/*"})
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             reason = (
@@ -71,28 +70,15 @@ class DriveClient:
                 "PROVIDER_ERROR"
             )
             raise ProviderError(reason) from exc
+        except ResponseTooLarge as exc:
+            raise ProviderError("RESPONSE_SIZE_LIMIT_EXCEEDED") from exc
         except httpx.HTTPError as exc:
             raise ProviderError("PROVIDER_UNAVAILABLE") from exc
-
-    async def _stream(self, client: httpx.AsyncClient, url: str,
-                      params: dict[str, str], limit: int) -> bytes:
-        async with client.stream("GET", url, params=params,
-                                 headers={"Authorization": f"Bearer {self._token}",
-                                          "Accept": "*/*"}) as response:
-            response.raise_for_status()
-            parts: list[bytes] = []
-            count = 0
-            async for part in response.aiter_bytes():
-                count += len(part)
-                if count > limit:
-                    raise ProviderError("RESPONSE_SIZE_LIMIT_EXCEEDED")
-                parts.append(part)
-            return b"".join(parts)
 
     async def _json(self, url: str, params: dict[str, str]) -> dict:
         payload = await self._fetch(url, params)
         try:
-            value = json.loads(payload)
+            value = json_object(payload)
         except (ValueError, UnicodeDecodeError) as exc:
             raise ProviderError("PROVIDER_RESPONSE_INVALID") from exc
         if not isinstance(value, dict):
@@ -153,6 +139,11 @@ class DriveClient:
         if mime not in _TEXT_MIMES and mime != _GOOGLE_DOC_MIME:
             raise ProviderError("UNSUPPORTED_MIME_TYPE")
         size = metadata.get("size")
+        # Google Drive serializes int64 `size` values as JSON strings.
+        if isinstance(size, str):
+            if not size.isdecimal() or len(size) > 20:
+                raise ProviderError("PROVIDER_RESPONSE_INVALID")
+            size = int(size)
         if isinstance(size, int) and size > MAX_RESPONSE_BYTES:
             raise ProviderError("RESPONSE_SIZE_LIMIT_EXCEEDED")
         url = DRIVE_URL + "/" + quote(file_id, safe="")
@@ -168,3 +159,4 @@ class DriveClient:
             raise ProviderError("UNSUPPORTED_TEXT_ENCODING") from exc
         return {"id": file_id, "name": metadata.get("name"),
                 "mimeType": mime, "text": text, "content_untrusted": True}
+

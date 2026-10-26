@@ -87,7 +87,14 @@ def payload_sha256(payload: dict[str, Any]) -> str:
     """Hash canonical JSON; reject NaN, non-string keys and non-JSON data."""
     if not isinstance(payload, dict):
         raise ValueError("payload_must_be_json_object")
-    if not all(isinstance(key, str) for key in payload):
+    def string_keys(value):
+        if isinstance(value, dict):
+            return all(isinstance(key, str) and string_keys(item) for key, item in value.items())
+        if isinstance(value, (list, tuple)):
+            return all(string_keys(item) for item in value)
+        return True
+
+    if not string_keys(payload):
         raise ValueError("payload_keys_must_be_strings")
     try:
         raw = json.dumps(
@@ -275,3 +282,4 @@ class ApprovalLedger:
                 delete(ApprovalGrant).where(ApprovalGrant.expires_at <= cutoff)
             )
             return max(int(result.rowcount or 0), 0)
+

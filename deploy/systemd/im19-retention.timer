@@ -1,0 +1,11 @@
+[Unit]
+Description=Run IM19 retention cleanup every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Unit=im19-retention.service
+
+[Install]
+WantedBy=timers.target

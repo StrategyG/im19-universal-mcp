@@ -33,7 +33,15 @@
 - [ ] Production backup retention, PITR/restore drill, KMS historical key recovery, RPO/RTO acceptance, and external penetration test.
 - [ ] Verify YouTube, Drive and Google OAuth with real test accounts.
 - [ ] Google restricted-scope verification/security assessment before public Drive content access.
-- [ ] First-party browser session binding for Google OAuth initiation and callback (confirmation fallback alone insufficient).
+- [x] First-party browser PKCE login, exact issuer-verified subject/client proof, Secure HttpOnly cookie binding for Google initiation/callback, and production rejection of unbound/legacy grants (mock acceptance).
+- [ ] Live acceptance of the configured browser client, issuer introspection and Google callback.
 - [ ] Ingress reverse-proxy query log redaction for Google `code` and `state`.
 - [ ] Production audit retention and redaction review.
 - [ ] Approver evidence retention policy, tamper-evident audit exports and reviewer roles.
+
+
+- [x] All-route Host/Origin checks, stateless HTTP worker switching and response security headers.
+- [x] Bounded upstream responses and total deadlines; strict JSON rejects duplicate keys/non-finite numbers.
+- [x] Atomic provider activation/audit/no-rebind UPSERT; rollback and concurrency regressions.
+- [x] Hash-pinned runtime dependency installation and clean-wheel verification in CI.
+- [x] Readiness validates required database tables/columns; local bootstrap refuses PostgreSQL.
