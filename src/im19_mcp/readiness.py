@@ -7,7 +7,7 @@ from __future__ import annotations
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
-REQUIRED_SCHEMA_REVISION = "0006_write_approvals"
+REQUIRED_SCHEMA_REVISION = "0007_arusia_workflow"
 
 
 def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVISION) -> bool:
@@ -23,6 +23,7 @@ def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVI
             from im19_mcp.governance import approvals  # noqa: F401
             from im19_mcp import distributed_quota  # noqa: F401
             from im19_mcp.governance import write_approval  # noqa: F401
+            from im19_mcp.arusia import workflow  # noqa: F401
 
             # A revision marker alone cannot prove tables/columns are usable.
             for table in Base.metadata.sorted_tables:
