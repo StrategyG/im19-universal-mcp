@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 
 from im19_mcp.arusia.workflow import ArusiaEpisode
 from im19_mcp.autonomy.engine import (
-    AutonomousEngine, AutonomousError, WorkflowStep, WorkflowRun,
+    AutonomousEngine, AutonomousError, WorkflowStep,
     compile_plan, prepare_plan,
 )
 from im19_mcp.config import Settings
