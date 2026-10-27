@@ -150,6 +150,7 @@ def configure(root: Path, mcp: str, issuer: str, callback: str = CALLBACK,
         'IM19_DEV_SUBJECT': '', 'IM19_FERNET_PREVIOUS_KEYS': '', 'IM19_PORT': '8000',
         'IM19_ENABLE_APPROVED_DRIVE_WRITES': 'false',
         'IM19_ENABLE_ARUSIA_WORKFLOWS': 'false',
+        'IM19_ENABLE_AUTONOMOUS_WORKFLOWS': 'false',
     }
     # Container bind only: published host ports are restricted to loopback.
     env['IM19_BIND_HOST'] = '0.0.0.0'  # nosec B104
