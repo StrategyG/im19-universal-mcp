@@ -208,6 +208,43 @@ class WriteApprovalPortal:
             row.status = "APPROVED"
         return "APPROVED"
 
+    def status(self, *, ticket: str, subject: str, account_id: str) -> dict:
+        """Return only non-secret status for the verified MCP owner and account.
+
+        The browser link is not a credential. Do not reveal approval grants,
+        CSRF, cookies, verifier or any encrypted payload from this endpoint.
+        """
+        key = digest(ticket)
+        with self.vault.sessions() as session:
+            row = session.execute(select(WriteApprovalRequest).where(
+                WriteApprovalRequest.ticket_hash == key,
+                WriteApprovalRequest.subject == subject,
+                WriteApprovalRequest.account_id == account_id,
+            )).scalar_one_or_none()
+            if row is None:
+                raise PermissionError("write_approval_scope_mismatch")
+            if row.expires_at <= time.time():
+                return {"status": "APPROVAL_EXPIRED"}
+            states = {
+                "PENDING": "APPROVAL_PENDING", "LOGIN": "APPROVAL_PENDING",
+                "VERIFYING": "APPROVAL_PENDING", "REVIEW": "APPROVAL_PENDING",
+                "ISSUING": "APPROVAL_PENDING", "APPROVED": "APPROVED",
+                "CLAIMED": "APPROVAL_USED", "DENIED": "APPROVAL_DENIED",
+            }
+            return {"status": states.get(row.status, "APPROVAL_UNAVAILABLE"),
+                    "action": ACTION, "service": "drive"}
+
+    def purge_expired(self, *, now: float | None = None) -> int:
+        """Operator-only retention cleanup, not available as MCP tool."""
+        from sqlalchemy import delete
+
+        cutoff = time.time() if now is None else now
+        with self.vault.sessions.begin() as session:
+            result = session.execute(delete(WriteApprovalRequest).where(
+                WriteApprovalRequest.expires_at <= cutoff
+            ))
+            return max(int(result.rowcount or 0), 0)
+
     def consume(self, *, ticket: str, subject: str, account_id: str, name: str) -> tuple[str, str]:
         """Return grant ONLY to trusted server-side orchestration, never MCP client."""
         key = digest(ticket)
