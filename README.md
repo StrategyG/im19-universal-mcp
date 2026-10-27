@@ -138,3 +138,15 @@ local operator gates and owner-scoped MCP tools, behind
 `IM19_ENABLE_ARUSIA_WORKFLOWS=false` by default. It does **not** execute
 ComfyUI, Blender, FFmpeg or autonomous generative media workers. See
 [ARUSIA workflow contract](docs/ARUSIA_WORKFLOW_V9.md).
+
+## IM19 bounded autonomous workflows (staging)
+
+The opt-in deterministic workflow compiler can turn the recognized ARUSIA
+episode-preparation goal into an allowlisted DAG. MCP tools validate, create,
+start, pause, resume, cancel and read workflow state. A separate local worker
+may execute *only* manifest inspection and idempotent episode registration;
+no ComfyUI, Blender, FFmpeg or arbitrary code is called. The host must run
+the worker under a restricted service manager for persistent progress.
+`IM19_ENABLE_AUTONOMOUS_WORKFLOWS=false` and
+`IM19_ENABLE_ARUSIA_WORKFLOWS=false` remain defaults.
+See [scope and operator instructions](docs/IM19_AUTONOMOUS_WORKFLOW.md).

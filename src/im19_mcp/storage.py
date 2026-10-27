@@ -105,6 +105,7 @@ class Vault:
         from im19_mcp.governance import write_approval  # noqa: F401
         from im19_mcp.arusia import workflow  # noqa: F401
         from im19_mcp.arusia import artifacts  # noqa: F401
+        from im19_mcp.autonomy import engine  # noqa: F401
 
         Base.metadata.create_all(self.engine)
 

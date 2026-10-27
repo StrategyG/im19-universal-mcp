@@ -21,6 +21,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from starlette.concurrency import run_in_threadpool
 
 from im19_mcp.arusia.workflow import ArusiaWorkflow, WorkflowError, STAGES, preview
+from im19_mcp.autonomy.engine import AutonomousEngine, AutonomousError, prepare_plan, compile_plan
 from im19_mcp.config import Settings
 from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
@@ -72,6 +73,7 @@ def register_tools(
     )
 
     arusia_engine = ArusiaWorkflow(vault) if vault is not None else None
+    autonomous_engine = AutonomousEngine(vault) if vault is not None else None
 
     def subject() -> str | None:
         return authenticated_subject(allow_stdio_dev=allow_stdio_dev)
@@ -519,6 +521,113 @@ def register_tools(
             return {"status": "INVALID_OR_NOT_FOUND", "reason": str(exc)}
         except (SQLAlchemyError, InvalidToken, OSError):
             return {"status": "SERVICE_UNAVAILABLE", "reason": "workflow_database_unavailable"}
+
+    @server.resource("im19://autonomy/capabilities")
+    def autonomy_capabilities() -> str:
+        """Conservative declaration of implemented execution operations."""
+        return json.dumps({
+            "schema_version": "im19.workflow.v1",
+            "feature_enabled": settings.enable_autonomous_workflows,
+            "planner": "deterministic_template_only",
+            "supported_goals": ["prepare_arusia_episode"],
+            "worker_operations": ["arusia.manifest_preview", "arusia.episode_register"],
+            "unrestricted_code_execution": False,
+            "image_worker_connected": False, "video_worker_connected": False,
+            "needs_local_worker_service": True,
+        })
+
+    @server.tool(name="im19_workflow_plan")
+    def im19_workflow_plan(goal: str, manifest_json: str) -> dict:
+        """Create an allowlisted plan. This is not arbitrary LLM tool execution."""
+        try:
+            return prepare_plan(goal, manifest_json)
+        except (AutonomousError, WorkflowError, ValueError):
+            return {"status": "PLAN_REJECTED", "reason": "unsupported_goal_or_invalid_manifest"}
+
+    @server.tool(name="im19_workflow_validate")
+    def im19_workflow_validate(plan_json: str) -> dict:
+        """Compile and authenticate constraints without persisting a plan."""
+        try:
+            plan, sha = compile_plan(plan_json)
+            return {"status": "PLAN_VALID", "plan_sha256": sha, "nodes": len(plan["nodes"]),
+                    "external_side_effects": False, "needs_explicit_start": True}
+        except (AutonomousError, WorkflowError, ValueError):
+            return {"status": "PLAN_REJECTED", "reason": "plan_not_allowlisted"}
+
+    @server.tool(name="im19_workflow_create")
+    async def im19_workflow_create(plan_json: str) -> dict:
+        """Persist a compiled owner-bound DRAFT; execution needs separate start."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED"}
+        if not settings.enable_autonomous_workflows or not settings.enable_arusia_workflows:
+            return {"status": "FEATURE_DISABLED"}
+        if autonomous_engine is None:
+            return {"status": "NOT_CONFIGURED"}
+        denied = await async_tool_quota(user, "mcp:workflow-create", limit=5)
+        if denied is not None:
+            return denied
+        try:
+            return await run_in_threadpool(autonomous_engine.create, user, plan_json)
+        except (AutonomousError, WorkflowError, ValueError) as exc:
+            return {"status": "WORKFLOW_REJECTED", "reason": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "workflow_database_unavailable"}
+
+    async def _workflow_action(action: str, run_id: str) -> dict:
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED"}
+        if not settings.enable_autonomous_workflows or not settings.enable_arusia_workflows:
+            return {"status": "FEATURE_DISABLED"}
+        if autonomous_engine is None:
+            return {"status": "NOT_CONFIGURED"}
+        denied = await async_tool_quota(user, "mcp:workflow-transition", limit=20)
+        if denied is not None:
+            return denied
+        try:
+            return await run_in_threadpool(autonomous_engine.action, user, run_id, action)
+        except (AutonomousError, WorkflowError, ValueError) as exc:
+            return {"status": "WORKFLOW_DENIED", "reason": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE"}
+
+    @server.tool(name="im19_workflow_start")
+    async def im19_workflow_start(run_id: str) -> dict:
+        """Explicitly authorize starting only this owner's compiled plan."""
+        return await _workflow_action("start", run_id)
+
+    @server.tool(name="im19_workflow_pause")
+    async def im19_workflow_pause(run_id: str) -> dict:
+        return await _workflow_action("pause", run_id)
+
+    @server.tool(name="im19_workflow_resume")
+    async def im19_workflow_resume(run_id: str) -> dict:
+        return await _workflow_action("resume", run_id)
+
+    @server.tool(name="im19_workflow_cancel")
+    async def im19_workflow_cancel(run_id: str) -> dict:
+        return await _workflow_action("cancel", run_id)
+
+    @server.tool(name="im19_workflow_status")
+    async def im19_workflow_status(run_id: str) -> dict:
+        """Read-only tenant-scoped status; no worker lease secrets exposed."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED"}
+        if not settings.enable_autonomous_workflows or not settings.enable_arusia_workflows:
+            return {"status": "FEATURE_DISABLED"}
+        if autonomous_engine is None:
+            return {"status": "NOT_CONFIGURED"}
+        denied = await async_tool_quota(user, "mcp:workflow-status", limit=60)
+        if denied is not None:
+            return denied
+        try:
+            return await run_in_threadpool(autonomous_engine.status, user, run_id)
+        except (AutonomousError, ValueError) as exc:
+            return {"status": "WORKFLOW_NOT_FOUND_OR_INVALID", "reason": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE"}
 
     @server.tool(name="drive_read_file")
     async def drive_read_file(file_id: str) -> dict:

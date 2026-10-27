@@ -17,7 +17,7 @@ def test_schema_revision_must_be_exact(tmp_path):
         conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0003_refresh_leases')"))
     assert database_ready(engine) is False
     with engine.begin() as conn:
-        conn.execute(text("UPDATE alembic_version SET version_num='0008_arusia_artifacts'"))
+        conn.execute(text("UPDATE alembic_version SET version_num='0009_autonomous_workflow'"))
     assert database_ready(engine) is False  # a marker without tables is insufficient
     Base.metadata.create_all(engine)
     assert database_ready(engine) is True
