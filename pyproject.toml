@@ -31,6 +31,7 @@ dev = [
 im19-mcp = "im19_mcp.server:main"
 im19-gateway = "im19_mcp.gateway:main"
 im19-arusia-operator = "im19_mcp.arusia_operator:main"
+im19-autonomy-worker = "im19_mcp.autonomy_worker:main"
 im19-init-db = "im19_mcp.cli:main"
 im19-purge-expired = "im19_mcp.cli:purge_expired"
 im19-rotate-keys = "im19_mcp.cli:rotate_keys"
