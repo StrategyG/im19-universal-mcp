@@ -40,6 +40,16 @@ def _literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def validate_folder_name(name: str) -> str:
+    """Validate a root-folder name before consuming a one-time approval."""
+        if (not isinstance(name, str) or not 1 <= len(name) <= 128 or
+                name.strip() != name or name in {".", ".."} or
+                any(ord(ch) < 32 or ord(ch) == 127 or ch in "/\\\\"
+                    for ch in name)):
+            raise ValueError("drive_folder_name_invalid")
+    return name
+
+
 class DriveClient:
     """Read operations and an approval-gated, narrowly scoped folder creation primitive."""
 
@@ -135,11 +145,7 @@ class DriveClient:
         automatically after an ambiguous outcome. Verify using GET metadata.
         Requires separately consented `drive.file` scope.
         """
-        if (not isinstance(name, str) or not 1 <= len(name) <= 128 or
-                name.strip() != name or name in {".", ".."} or
-                any(ord(ch) < 32 or ord(ch) == 127 or ch in "/\\\\"
-                    for ch in name)):
-            raise ValueError("drive_folder_name_invalid")
+        validate_folder_name(name)
         try:
             result = await request_json(
                 "POST", DRIVE_URL, client=self._client, timeout=12,
