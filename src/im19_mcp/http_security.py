@@ -31,7 +31,8 @@ class GatewaySecurityMiddleware:
                 headers["X-Frame-Options"] = "DENY"
                 headers["Referrer-Policy"] = "no-referrer"
                 headers["Content-Security-Policy"] = (
-                    "default-src 'none'; frame-ancestors 'none'; form-action 'none'"
+                    "default-src 'none'; frame-ancestors 'none'; form-action " +
+                    ("'self'" if scope.get("path") == "/approve/write/callback" else "'none'")
                 )
                 if self.production:
                     headers["Strict-Transport-Security"] = "max-age=31536000"
