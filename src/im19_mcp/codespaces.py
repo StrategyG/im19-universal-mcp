@@ -148,6 +148,7 @@ def configure(root: Path, mcp: str, issuer: str, callback: str = CALLBACK,
         'IM19_BROWSER_TOKEN': auth + '/protocol/openid-connect/token',
         'IM19_BROWSER_CLIENT_ID': 'im19-browser', 'IM19_BROWSER_CLIENT_SECRET': credentials['browser_secret'],
         'IM19_DEV_SUBJECT': '', 'IM19_FERNET_PREVIOUS_KEYS': '', 'IM19_PORT': '8000',
+        'IM19_ENABLE_APPROVED_DRIVE_WRITES': 'false',
     }
     # Container bind only: published host ports are restricted to loopback.
     env['IM19_BIND_HOST'] = '0.0.0.0'  # nosec B104
