@@ -382,7 +382,7 @@ def sync_write_callback(root: Path, settings: dict,
         config = record.json()
         redirects = config.get('redirectUris')
         if (not isinstance(redirects, list) or
-                any(not isinstance(v, str) for v in redirects) or
+                any(not isinstance(v, str) or '*' in v for v in redirects) or
                 previous_callback not in redirects or
                 config.get('clientId') != 'im19-browser' or
                 config.get('standardFlowEnabled') is not True):
