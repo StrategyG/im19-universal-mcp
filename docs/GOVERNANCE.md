@@ -1,8 +1,9 @@
 # IM19 — Persistent Human Approval & Idempotency (Phase 6 foundation)
 
 **Status: backend security primitive implemented and mock/integration tested.**
-No user-facing account portal or trusted approval issuance endpoint exists.
-An opt-in `drive_create_folder` tool is implemented as a restricted proof of
+An initial trusted OAuth browser approval page exists for Drive folder
+creation, but production security acceptance is pending. No general account
+administration portal exists. An opt-in `drive_create_folder` tool is implemented as a restricted proof of
 integration, but it is disabled by default. **Do not treat this as production-ready approval UX.**
 
 ## Boundary and decision contract
@@ -26,8 +27,9 @@ Provider-write orchestration (exposed only for explicitly enabled Drive folder c
 The default MCP configuration remains **read-only**. A restricted Drive root
 folder write tool is disabled by default and consumes externally issued grants.
 AI-generated text, model confirmation or a guessed approval code cannot issue
-any approval. The temporary approval-token tool interface is **not** a
-production-ready human approval UX.
+any approval. The normal remote flow keeps the approval grant encrypted on the server;
+the legacy tool-token path is restricted to trusted stdio development tests.
+The new browser review still requires security and real-provider acceptance.
 
 ### Properties enforced by the database
 
