@@ -26,7 +26,7 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 - `youtube_get_channel`, `youtube_list_videos`, `youtube_get_analytics` (read-only, require valid stored provider tokens and respective scopes).
 - `drive_search_files`, `drive_list_folder`, `drive_get_metadata` (read-only, separate Drive OAuth and metadata scope).
 - `drive_read_file` (bounded text only, requires **explicit restricted drive.readonly** consent; unsupported MIME and binary/PDF/EPUB return an error).
-- `drive_create_folder` (**disabled by default**; creates a root folder only when explicitly enabled, with separate Drive `drive.file` consent, one-time external approval, idempotency reservation and read-after-write verification; [limitations](docs/DRIVE_WRITE.md)).
+- `drive_create_folder` (**disabled by default**; asks the user to approve in a browser after IM19 OAuth login, with separate Drive `drive.file` consent, server-held one-time approval, idempotency reservation and read-after-write verification; [limitations](docs/DRIVE_WRITE.md)).
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
