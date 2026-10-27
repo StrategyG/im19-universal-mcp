@@ -152,7 +152,8 @@ def parse_manifest(payload: str) -> tuple[dict[str, Any], str]:
 def preview(payload: str) -> dict[str, Any]:
     manifest, checksum = parse_manifest(payload)
     shots = manifest["shots"]
-    required = sorted(set().union(*(set(x["asset_ids"]) | {x["location_id"]} for x in shots)))
+    required = sorted(set().union(*(set(x["asset_ids"]) | {x["location_id"]} |
+                                    {name + "_MASTER" for name in x["characters"]} for x in shots)))
     return {
         "status": "PLAN_VALID", "episode": manifest["episode"], "manifest_sha256": checksum,
         "shots": len(shots), "fps": 24, "total_frames": sum(x["duration_frames"] for x in shots),
@@ -374,8 +375,17 @@ class ArusiaWorkflow:
                              if entry["shot_id"] == task.shot_id), None)
                 if shot is None:
                     raise WorkflowError("shot_not_found")
-                for asset_id in set(shot["asset_ids"]) | {shot["location_id"]}:
+                required = (set(shot["asset_ids"]) | {shot["location_id"]} |
+                            {character + "_MASTER" for character in shot["characters"]})
+                for asset_id in required:
                     registry.check(subject, asset_id, approved=True)
+            if task.stage == "SHOT_QC":
+                # Serialize concurrent final-shot approvals via an episode row
+                # lock. Without this, simultaneous commits can both miss the
+                # fan-in condition and leave EPISODE_COMPOSITE blocked forever.
+                session.execute(select(ArusiaEpisode).where(
+                    ArusiaEpisode.episode_id == task.episode_id,
+                ).with_for_update()).scalar_one()
             changed = session.execute(update(ArusiaTask).where(
                 ArusiaTask.task_id == task_id, ArusiaTask.status == "WAITING_APPROVAL"
             ).values(status="APPROVED", evidence_digest=evidence_sha256))
