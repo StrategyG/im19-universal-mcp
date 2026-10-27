@@ -26,6 +26,7 @@ from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
 from im19_mcp.drive import DriveClient, validate_folder_name
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError, SCOPES
 from im19_mcp.governance.approvals import ApprovalDenied, ApprovalLedger, DuplicateExecution
+from im19_mcp.governance.write_approval import WriteApprovalPortal
 from im19_mcp.registry import SERVICES, list_services
 from im19_mcp.storage import Vault
 from im19_mcp.youtube import ProviderError, YouTubeClient
@@ -62,6 +63,7 @@ def register_tools(
     distributed_quota: DistributedQuota | None = None,
     browser_auth=None,
     approval_ledger: ApprovalLedger | None = None,
+    write_approval_portal: WriteApprovalPortal | None = None,
 ) -> None:
     """Register read tools plus opt-in approval-gated Drive creation."""
     ledger = approval_ledger if approval_ledger is not None else (
@@ -323,8 +325,8 @@ def register_tools(
         )
 
     @server.tool(name="drive_create_folder")
-    async def drive_create_folder(name: str, approval_token: str = "",
-                                  idempotency_key: str = "") -> dict:
+    async def drive_create_folder(name: str, approval_request_id: str = "",
+                                  idempotency_key: str = "", approval_token: str = "") -> dict:
         """Opt-in Drive root-folder write. Requires out-of-band, one-time approval.
 
         Approval issuance is NEVER exposed as an MCP tool. Human review must
@@ -341,8 +343,8 @@ def register_tools(
             validate_folder_name(name)
         except ValueError:
             return {"status": "INVALID_ARGUMENT", "reason": "drive_folder_name_invalid"}
-        if not approval_token or not idempotency_key:
-            return {"status": "APPROVAL_REQUIRED", "reason": "trusted_one_time_approval_required"}
+        if not approval_request_id and not approval_token and write_approval_portal is None:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_portal_not_configured"}
         denied = await async_tool_quota(user, "mcp:provider-writes", limit=10)
         if denied is not None:
             return denied
@@ -355,6 +357,35 @@ def register_tools(
             return {"status": str(exc)}
         except (SQLAlchemyError, InvalidToken, OSError):
             return {"status": "SERVICE_UNAVAILABLE", "reason": "storage_unavailable"}
+        if approval_token and not allow_stdio_dev:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_required"}
+        if write_approval_portal is not None and not approval_request_id and not approval_token:
+            try:
+                return await run_in_threadpool(
+                    write_approval_portal.request, subject=user, account_id=account_id, name=name,
+                )
+            except (SQLAlchemyError, InvalidToken, OSError):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+        if approval_request_id:
+            if write_approval_portal is None:
+                return {"status": "NOT_CONFIGURED", "reason": "write_approval_portal_required"}
+            try:
+                approval_token, idempotency_key = await run_in_threadpool(
+                    write_approval_portal.consume,
+                    ticket=approval_request_id, subject=user, account_id=account_id, name=name,
+                )
+            except PermissionError as exc:
+                reasons = {
+                    "write_approval_denied": "APPROVAL_DENIED",
+                    "write_approval_expired": "APPROVAL_EXPIRED",
+                    "write_approval_pending_or_consumed": "APPROVAL_PENDING_OR_USED",
+                    "write_approval_scope_mismatch": "APPROVAL_INVALID",
+                }
+                return {"status": reasons.get(str(exc), "APPROVAL_INVALID")}
+            except (SQLAlchemyError, InvalidToken, OSError):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+        if not approval_token or not idempotency_key:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_required"}
         payload = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
         try:
             reservation = await run_in_threadpool(
