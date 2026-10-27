@@ -32,6 +32,10 @@ def purge_expired() -> None:
     from im19_mcp.governance import ApprovalLedger
 
     expired["governance_approvals"] = ApprovalLedger(store).purge_expired_approvals()
+    from im19_mcp.governance.write_approval import WriteApprovalPortal
+
+    # This retention operation needs no OAuth settings or browser session.
+    expired["write_approval_requests"] = WriteApprovalPortal.purge_expired_requests(store)
     from im19_mcp.distributed_quota import DistributedQuota
 
     expired["rate_windows"] = DistributedQuota(
