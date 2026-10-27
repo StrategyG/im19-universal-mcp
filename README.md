@@ -130,3 +130,11 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
+
+## ARUSIA v9.1 (draft integration)
+
+This staging-only module adds a durable shot/episode DAG, asset checksums,
+local operator gates and owner-scoped MCP tools, behind
+`IM19_ENABLE_ARUSIA_WORKFLOWS=false` by default. It does **not** execute
+ComfyUI, Blender, FFmpeg or autonomous generative media workers. See
+[ARUSIA workflow contract](docs/ARUSIA_WORKFLOW_V9.md).
