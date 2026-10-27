@@ -234,12 +234,13 @@ class WriteApprovalPortal:
             return {"status": states.get(row.status, "APPROVAL_UNAVAILABLE"),
                     "action": ACTION, "service": "drive"}
 
-    def purge_expired(self, *, now: float | None = None) -> int:
+    @staticmethod
+    def purge_expired_requests(vault: Vault, *, now: float | None = None) -> int:
         """Operator-only retention cleanup, not available as MCP tool."""
         from sqlalchemy import delete
 
         cutoff = time.time() if now is None else now
-        with self.vault.sessions.begin() as session:
+        with vault.sessions.begin() as session:
             result = session.execute(delete(WriteApprovalRequest).where(
                 WriteApprovalRequest.expires_at <= cutoff
             ))
