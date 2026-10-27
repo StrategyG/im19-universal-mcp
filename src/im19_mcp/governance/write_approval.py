@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlsplit
 
 import httpx
 from mcp.server.auth.provider import TokenVerifier
-from sqlalchemy import Float, String, Text, select, update
+from sqlalchemy import Float, String, Text, select
 from sqlalchemy.orm import Mapped, mapped_column
 from starlette.concurrency import run_in_threadpool
 
