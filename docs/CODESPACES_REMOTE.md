@@ -156,3 +156,25 @@ changing Python source does not rewrite an existing imported Keycloak realm,
 `stack.env` or `compose.json`. Apply any required OAuth callback/environment
 changes via controlled administration, keeping persistent keys and volumes.
 A successful CI Keycloak probe does not verify live Google writes.
+
+### Repair the existing Keycloak write-approval redirect
+
+An existing Keycloak realm is not changed automatically by updating source
+code or running \`up\`. After updating the PR branch checkout and starting
+Keycloak, run the explicit, non-destructive operator command:
+
+\`\`\`bash
+python -m im19_mcp.codespaces sync-write-callback
+\`\`\`
+
+This uses the existing local Codespaces admin credentials (never prints them),
+verifies that the \`im19-browser\` OAuth client already has the original
+\`/oauth/browser/callback\` redirect, adds only the exact
+\`/approve/write/callback\` redirect, and verifies the updated configuration.
+It preserves credentials, volumes, unrelated redirects and other clients.
+Repeating the command is safe. Unrecognized or wildcard redirect configuration
+fails closed. This is a Codespaces development helper, not a production
+Keycloak administration tool.
+
+This command does not grant Google \`drive.file\` scopes, enable writes or test
+a live Google account. Keep write disabled until staging security review.
