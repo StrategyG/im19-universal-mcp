@@ -29,6 +29,13 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
+## Optional browser worker foundation
+
+An experimental, read-only Chromium inspector is available as a separately
+installed `browser` extra. It is **not exposed as an MCP tool**, cannot log in
+to connected accounts, and requires a dedicated network-isolated worker before
+production use. See [browser worker security and usage](docs/BROWSER_WORKER.md).
+
 ## Codespaces plugin connection setup
 
 For an isolated PostgreSQL + Keycloak OAuth test environment, use the
