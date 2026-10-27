@@ -12,6 +12,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint, select, update
@@ -166,6 +167,14 @@ def preview(payload: str) -> dict[str, Any]:
 @dataclass(frozen=True)
 class ArusiaWorkflow:
     vault: Vault
+    artifact_root: str | Path | None = None
+
+    def _artifacts(self):
+        """Production evidence is checked from bytes on disk, never model claims."""
+        if self.artifact_root is None:
+            raise WorkflowError("artifact_store_not_configured")
+        from im19_mcp.arusia.artifacts import ArtifactRegistry
+        return ArtifactRegistry(self.vault, self.artifact_root)
 
     def create(self, subject: str, manifest_json: str) -> dict[str, Any]:
         manifest, digest = parse_manifest(manifest_json)
@@ -297,6 +306,10 @@ class ArusiaWorkflow:
             raise WorkflowError("lease_token_invalid")
         if not isinstance(provenance, dict) or len(json.dumps(provenance)) > 4096:
             raise WorkflowError("provenance_invalid")
+        # Only immutable blobs actually ingested for this task are admissible.
+        self._artifacts().check(
+            subject, "TASK_" + task_id.upper(), artifact_sha256, approved=False,
+        )
         # Deterministic image runs must declare model, references, resolution and seed.
         stage = ""
         with self.vault.sessions.begin() as session:
@@ -348,6 +361,21 @@ class ArusiaWorkflow:
             task, _ = row
             if task.kind != "HUMAN" or task.status != "WAITING_APPROVAL":
                 raise WorkflowError("human_gate_not_ready")
+            # Even human acceptance must reference evidence bytes in the registry.
+            registry = self._artifacts()
+            registry.check(subject, "EVIDENCE_" + task_id.upper(),
+                           evidence_sha256, approved=False)
+            if task.stage == "ASSET_LOCK":
+                episode = session.execute(select(ArusiaEpisode).where(
+                    ArusiaEpisode.episode_id == task.episode_id,
+                    ArusiaEpisode.subject == subject,
+                )).scalar_one()
+                shot = next((entry for entry in json.loads(episode.manifest_json)["shots"]
+                             if entry["shot_id"] == task.shot_id), None)
+                if shot is None:
+                    raise WorkflowError("shot_not_found")
+                for asset_id in set(shot["asset_ids"]) | {shot["location_id"]}:
+                    registry.check(subject, asset_id, approved=True)
             changed = session.execute(update(ArusiaTask).where(
                 ArusiaTask.task_id == task_id, ArusiaTask.status == "WAITING_APPROVAL"
             ).values(status="APPROVED", evidence_digest=evidence_sha256))
