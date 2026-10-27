@@ -46,6 +46,7 @@ class Settings:
     browser_token: str = ""
     browser_client_id: str = ""
     browser_client_secret: str = field(default="", repr=False)
+    enable_approved_drive_writes: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -74,6 +75,7 @@ class Settings:
             browser_token=os.getenv("IM19_BROWSER_TOKEN", ""),
             browser_client_id=os.getenv("IM19_BROWSER_CLIENT_ID", ""),
             browser_client_secret=os.getenv("IM19_BROWSER_CLIENT_SECRET", ""),
+            enable_approved_drive_writes=os.getenv("IM19_ENABLE_APPROVED_DRIVE_WRITES", "false").lower() == "true",
         )
 
     def browser_enabled(self) -> bool:
