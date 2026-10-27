@@ -136,3 +136,15 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
+
+## Autonomous ARUSIA workflow (opt-in staging)
+
+This branch implements a **deterministic, allowlisted** IM19 planner and
+PostgreSQL-backed scheduler foundation. MCP can plan, validate, create, start,
+pause, resume, cancel and inspect a workflow. A separate local worker can
+automatically execute only `arusia.manifest_preview` and
+`arusia.episode_register`. It cannot run shell commands, generate media,
+approve creative work or call providers. Both `IM19_ENABLE_AUTONOMOUS_WORKFLOWS`
+and `IM19_ENABLE_ARUSIA_WORKFLOWS` are disabled by default.
+See [operational boundaries](docs/IM19_AUTONOMOUS_WORKFLOW.md).
+
