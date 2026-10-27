@@ -119,5 +119,5 @@ jobs:
           print("Ephemeral PostgreSQL backup and encrypted restore: PASS")
           PY
       - name: Verify SQL transactions and worker contention
-        run: python -m pytest -q tests/integration/test_postgres_governance.py
+        run: python -m pytest -q tests/integration/test_postgres_governance.py tests/integration/test_postgres_autonomous.py
 
