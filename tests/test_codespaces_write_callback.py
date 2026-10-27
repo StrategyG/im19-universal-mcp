@@ -94,8 +94,6 @@ def test_rejects_unexpected_browser_client_without_mutation(existing, redirects)
 
     with httpx.Client(transport=httpx.MockTransport(provider)) as client:
         # Unexpected client configuration must not be silently widened.
-        if any("*" in r for r in redirects):
-            pytest.xfail("Wildcards must be rejected by the policy hardening test.")
         with pytest.raises(RuntimeError, match="unexpected_configuration"):
             sync_write_callback(root, cfg, client=client)
     assert "PUT" not in methods
