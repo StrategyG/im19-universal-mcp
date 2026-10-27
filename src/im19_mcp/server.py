@@ -425,6 +425,34 @@ def register_tools(
                 "reservation_id": reservation.reservation_id,
                 "data": result, "verified": True}
 
+    @server.tool(name="drive_get_write_approval_status")
+    async def drive_get_write_approval_status(approval_request_id: str) -> dict:
+        """Check the current user's pending Drive write approval without executing it."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if not settings.enable_approved_drive_writes:
+            return {"status": "FEATURE_DISABLED"}
+        if oauth is None or write_approval_portal is None:
+            return {"status": "NOT_CONFIGURED", "reason": "browser_approval_portal_required"}
+        denied = await async_tool_quota(user, "mcp:write-approval-status", limit=30)
+        if denied is not None:
+            return denied
+        try:
+            account_id, _ = await oauth.access_token(
+                user, set(SCOPES["drive_write"]), service="drive",
+            )
+            return await run_in_threadpool(
+                write_approval_portal.status, ticket=approval_request_id,
+                subject=user, account_id=account_id,
+            )
+        except OAuthError as exc:
+            return {"status": str(exc)}
+        except (PermissionError, ValueError):
+            return {"status": "APPROVAL_INVALID"}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+
     @server.tool(name="drive_read_file")
     async def drive_read_file(file_id: str) -> dict:
         """Read bounded UTF-8 text only; explicitly requires restricted drive.readonly."""
