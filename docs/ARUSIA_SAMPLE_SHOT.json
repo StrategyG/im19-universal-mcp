@@ -1,0 +1,21 @@
+{
+  "schema_version": "arusia.v9.0",
+  "episode": "S01E01",
+  "fps": 24,
+  "shots": [
+    {
+      "shot_id": "SH001",
+      "action": "Kio mengangkat bintang dari posisi rendah hingga tinggi.",
+      "duration_frames": 120,
+      "characters": [
+        "KIO"
+      ],
+      "location_id": "HALAMAN_KIO",
+      "asset_ids": [
+        "KIO_MASTER",
+        "HALAMAN_KIO_BG",
+        "BINTANG_PROP"
+      ]
+    }
+  ]
+}
