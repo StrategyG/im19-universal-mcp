@@ -116,6 +116,8 @@ class Settings:
             or len(set(self.vault_previous_keys)) != len(self.vault_previous_keys)
         ):
             raise ValueError("duplicate_encryption_keys_forbidden")
+        if self.enable_approved_drive_writes and not (self.google_enabled() and self.browser_enabled()):
+            raise ValueError("approved_drive_writes_require_google_and_browser_oauth")
         if self.deployment_environment == "production":
             # This implementation requires an OFFLINE full rewrap. Production
             # gateways run primary-only after the migration and validation.
