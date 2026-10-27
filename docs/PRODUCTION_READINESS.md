@@ -93,3 +93,11 @@ schemas and a read-only local status invocation against the actual public
 endpoint. It never reports ChatGPT connectivity or production acceptance.
 These checks close a diagnostic gap: HTTP readiness alone cannot establish MCP
 client compatibility. Actual production acceptance gates above still apply.
+
+## Write approval browser review (staging-only, 27 October 2026)
+
+An explicit OAuth-first browser review page now issues one-use backend-held
+approval grants for Drive root-folder creation. Database schema revision
+`0006_write_approvals` and the exact browser redirect URI are required.
+Unit and simulated browser-route tests do not establish live account or
+ChatGPT write permission support. Production acceptance remains pending.
