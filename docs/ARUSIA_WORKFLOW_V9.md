@@ -6,41 +6,40 @@ code does not yet render episodes or generate individual frames.
 
 ## Workflow DAG
 
-For every shot, twelve ordered tasks are persisted:
+For every shot, ten sequential tasks are persisted. Three additional
+tasks are created once per episode.
 
-| Stage | Executor | Subsystem | Gate |
-|---|---|---|---|
-| SCRIPT_BREAKDOWN | Worker | Story Engine | file/artifact reference report |
-| ASSET_LOCK | Human | Asset Registry | human confirms source assets |
-| STORYBOARD | Worker | Story Engine | storyboard reference report |
-| CREATIVE_APPROVAL | Human | Creative Review | manual sign-off |
-| POSE_CAMERA | Worker | Shot Controller | controlled rig/depth/pose reference |
-| IMAGE_GENERATION | Worker | Precision Image Engine | model/LoRA/ControlNet/ref/seed metadata |
-| FRAME_QC | Human | Quality Governor | identity/pose/continuity inspection |
-| ANIMATION | Worker | Animation Engine | frame sequence/rig output reference |
-| AUDIO | Worker | Audio Engine | voice and SFX artifact reference |
-| RENDER | Worker | Render Engine | render output reference |
-| FINAL_QC | Human | Quality Governor | final episode review |
-| DELIVERY_PACKAGE | Worker | Render Engine | prepare bounded master/export bundle |
+| Scope | Stage | Executor |
+|---|---|---|
+| Shot | SCRIPT_BREAKDOWN | Worker |
+| Shot | ASSET_LOCK | Human; validates approved master assets |
+| Shot | STORYBOARD | Worker |
+| Shot | CREATIVE_APPROVAL | Human |
+| Shot | POSE_CAMERA | Worker |
+| Shot | IMAGE_GENERATION | Worker |
+| Shot | FRAME_QC | Human |
+| Shot | ANIMATION | Worker |
+| Shot | AUDIO | Worker |
+| Shot | SHOT_QC | Human |
+| Episode | EPISODE_COMPOSITE | Worker; only after ALL shot QC gates pass |
+| Episode | EPISODE_FINAL_QC | Human |
+| Episode | DELIVERY_PACKAGE | Worker |
 
-A successor becomes \`READY\` **only after** its worker predecessor reports
-completion, or its human-gated predecessor is approved by a *trusted operator*.
-Human approval cannot be issued via any MCP tool. AI cannot advance those
-gates by crafting a prompt.
+The episode composite has an explicit fan-in barrier and remains BLOCKED until
+every shot has passed SHOT_QC. Completion must reference a real hash-verified
+local artifact. That verifies bytes, not the creative correctness of the media.
 
-**Important limitation:** this initial DAG is deliberately sequential per
-shot. Production should add cross-shot dependencies, parallel audio/render jobs,
-adaptive retry queues, content-addressed storage, workers, cancellation,
-notifications and richer evidence provenance in separately reviewed PRs.
+Current limitations: no scheduler, media decoder, automatic image QC, Blender
+worker, FFmpeg renderer, continuity model, or provider publishing.
 
 ## Input manifest
 
-The strict manifest schema is \`arusia.v9.0\` and has:
+The strict manifest schema is `arusia.v9.0` and has:
 
-- \`episode\`: S01E01-style code, unique **per authenticated user**.
-- \`fps\`: exactly 24.
-- \`shots\`: 1 to 100.
-- Per shot: SH001-style ID, bounded action, \`duration_frames\` (1..3600),
+- `episode`: S01E01-style code, unique **per authenticated user**.
+- `fps`: exactly 24.
+- `shots`: 1 to 100.
+- Per shot: SH001-style ID, bounded action, `duration_frames` (1..3600),
   canonical character names (KIO/LUMI/ARKA/MAYOR/RUX), an uppercase location
   asset ID, and explicit asset IDs.
 
@@ -51,20 +50,20 @@ generated before rig/tween composition.
 
 The asset identifiers are **logical references, not proof that files exist**.
 An operator must actually verify approved character masters, backgrounds and
-props before passing \`ASSET_LOCK\`. No reference images, checkpoints, LoRAs,
+props before passing `ASSET_LOCK`. No reference images, checkpoints, LoRAs,
 ControlNet bundles or MP4 media are included in this PR.
 
 ## MCP tools
 
-- \`arusia_plan_episode(manifest_json)\`: strict validation, duration and stage
+- `arusia_plan_episode(manifest_json)`: strict validation, duration and stage
   estimate; **does not write**.
-- \`arusia_create_episode(manifest_json)\`: internal PostgreSQL episode and
+- `arusia_create_episode(manifest_json)`: internal PostgreSQL episode and
   shot-task metadata creation; requires verified MCP subject and operator
-  \`IM19_ENABLE_ARUSIA_WORKFLOWS=true\`. Idempotent for identical code/content;
+  `IM19_ENABLE_ARUSIA_WORKFLOWS=true`. Idempotent for identical code/content;
   rejects incompatible repeated manifests.
-- \`arusia_get_episode(episode_id, offset=0, limit=50)\`: owner-bound
+- `arusia_get_episode(episode_id, offset=0, limit=50)`: owner-bound
   paginated stage/task status, no secret output.
-- \`im19://arusia/workflow-v9\`: static capability contract exposing unconnected
+- `im19://arusia/workflow-v9`: static capability contract exposing unconnected
   image/render engines as unconnected.
 
 None of these tools can approve creative gates, claim worker leases, provide
@@ -73,42 +72,46 @@ the same **PostgreSQL** as IM19; development may use isolated SQLite.
 
 ## Trusted worker/operator boundary
 
-Local command \`im19-arusia-operator\` requires
-\`IM19_ARUSIA_OPERATOR_ACK=YES\` **and**
-\`IM19_ENABLE_ARUSIA_WORKFLOWS=true\` in a secured terminal with access to the
-IM19 database. It is **not a remotely authenticated worker API** and must
-not be offered as an MCP tool or published over a public port.
+The host-side CLI requires IM19_ENABLE_ARUSIA_WORKFLOWS=true,
+IM19_ARUSIA_OPERATOR_ACK=YES, IM19_ARUSIA_SCOPED_SUBJECT=<OWNER> and
+IM19_ARUSIA_ARTIFACT_ROOT=<PRIVATE_DIR> in a restricted local environment.
+These settings are **not IAM** and do not prove operator identity. Production
+requires externally authenticated operator accounts and workers.
 
-Examples after DB schema migration:
+Before accepting outputs, copy real input files into
+<PRIVATE_DIR>/incoming/ and register them:
 
-\`\`\`bash
-export IM19_ENABLE_ARUSIA_WORKFLOWS=true
-export IM19_ARUSIA_OPERATOR_ACK=YES
+```bash
+im19-arusia-operator ingest --subject '<OWNER>' \
+  --asset-id KIO_MASTER --source-name kio-master.png
+im19-arusia-operator ingest --subject '<OWNER>' \
+  --asset-id EVIDENCE_KIO_MASTER --source-name kio-review.json
+im19-arusia-operator approve-asset --subject '<OWNER>' \
+  --asset-id KIO_MASTER --artifact-sha256 '<MASTER_SHA256>' \
+  --evidence-sha256 '<REVIEW_SHA256>'
 
-# Authenticate MCP client, then create the episode using the provided JSON.
-# List its stages from MCP arusia_get_episode or:
-im19-arusia-operator inspect --subject '<VERIFIED_SUBJECT>' \
-  --episode-id '<EPISODE_ID>'
+# Claim secret goes to a private mode-0600 file; never to AI output.
+im19-arusia-operator claim --subject '<OWNER>' \
+  --task-id '<TASK_ID>' --worker-id local-worker-01 \
+  --lease-token-file '/secure/worker/lease-001'
+im19-arusia-operator ingest --subject '<OWNER>' \
+  --asset-id 'TASK_<TASK_ID_UPPERCASE>' --source-name task-output.json
+im19-arusia-operator complete --subject '<OWNER>' \
+  --task-id '<TASK_ID>' --lease-token-file '/secure/worker/lease-001' \
+  --artifact-sha256 '<OUTPUT_SHA256>' \
+  --provenance-json '{"worker_version":"local-staging"}'
 
-# Trusted local worker claims exactly one READY stage:
-im19-arusia-operator claim --subject '<VERIFIED_SUBJECT>' \
-  --task-id '<READY_TASK_ID>' --worker-id arusia-local-01
+# Human QC needs registered EVIDENCE_<TASK_ID_UPPERCASE> file.
+im19-arusia-operator approve --subject '<OWNER>' \
+  --task-id '<GATED_TASK_ID>' --evidence-sha256 '<EVIDENCE_SHA256>'
+```
 
-# The lease token is a secret. Keep it out of logs and prompts.
-im19-arusia-operator complete --subject '<VERIFIED_SUBJECT>' \
-  --task-id '<TASK_ID>' --lease-token '<SECRET_LEASE_TOKEN>' \
-  --artifact-sha256 '<ACTUAL_ARTIFACT_SHA256>' \
-  --provenance-json '{"tool":"trusted-local-worker"}'
+The CLI is only for privileged, audited local/staging operators. It cannot
+authenticate reviewers on its own or establish independently valid QC.
 
-# After independently reviewing the evidence (not a model self-approval):
-im19-arusia-operator approve --subject '<VERIFIED_SUBJECT>' \
-  --task-id '<WAITING_APPROVAL_TASK_ID>' \
-  --evidence-sha256 '<ACTUAL_REVIEW_EVIDENCE_SHA256>'
-\`\`\`
-
-For \`IMAGE_GENERATION\`, \`provenance-json\` must contain exactly the keys:
-\`model_sha256\`, \`lora_sha256\`, \`controlnet_sha256\`,
-\`reference_sha256\` (nonempty array), \`seed\` and \`resolution\`.
+For `IMAGE_GENERATION`, `provenance-json` must contain exactly the keys:
+`model_sha256`, `lora_sha256`, `controlnet_sha256`,
+`reference_sha256` (nonempty array), `seed` and `resolution`.
 These values are *reported* by a worker, **not cryptographically verified
 against media bytes by the MCP Gateway**.
 
@@ -120,20 +123,20 @@ implemented before claiming unattended batch generation or crash recovery.
 
 This branch intentionally builds on PR #15. The Alembic chain is:
 
-\`0005_distributed_quotas\` → \`0006_write_approvals\` →
-\`0007_arusia_workflow\`.
+`0005_distributed_quotas` → `0006_write_approvals` →
+`0007_arusia_workflow` → `0008_arusia_artifacts`.
 
-The default \`IM19_ENABLE_ARUSIA_WORKFLOWS=false\` prevents new workflow
+The default `IM19_ENABLE_ARUSIA_WORKFLOWS=false` prevents new workflow
 creation until enabled in staging. After backup and controlled migration,
-run \`alembic upgrade head\`. Do not initialize production schemas with
-\`create_all\` and do not reset persistent Codespaces volumes.
+run `alembic upgrade head`. Do not initialize production schemas with
+`create_all` and do not reset persistent Codespaces volumes.
 
 For a local development smoke test:
 
-\`\`\`bash
+```bash
 python -m pip install -e '.[dev]'
 pytest -q tests/test_arusia_workflow.py
-\`\`\`
+```
 
 Run the full CI matrix, schema readiness check and Codespaces OAuth flow
 before deploying any branch. Test real media workers and approval UX separately.
@@ -156,3 +159,18 @@ before deploying any branch. Test real media workers and approval UX separately.
 
 The sample manifest and CI synthetic tests are **NOT** production renders,
 validated character models, or evidence that ARUSIA media assets were read.
+
+## Artifact integrity added in v9.1
+
+- Each approved Character Master, prop and background is catalogued under a
+  scoped asset ID, file checksum and independent human review-evidence record.
+- Worker completion requires actual file bytes registered as TASK_<TASK_ID>.
+- Human QC requires registered EVIDENCE_<TASK_ID> bytes. Content hashes
+  are recomputed on every check to detect tampering.
+- Files are stored by content hash in a private directory. Symlink traversal,
+  missing files and unsupported file headers fail closed; each blob is
+  limited to 64 MiB. These protections do NOT replace an OS sandbox.
+- The schema now requires Alembic revision 0008_arusia_artifacts.
+- Video/audio/image decode verification, media quality metrics, real reviewer
+  identity, ComfyUI/Blender/FFmpeg adapters and persistent auto-worker scheduling
+  remain **NOT_IMPLEMENTED**.
