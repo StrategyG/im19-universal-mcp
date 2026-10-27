@@ -1,6 +1,5 @@
 """Non-destructive Codespaces write-callback reconciliation tests."""
 import json
-from pathlib import Path
 
 import httpx
 import pytest
