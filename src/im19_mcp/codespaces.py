@@ -105,7 +105,8 @@ def realm_config(mcp: str, issuer: str, credentials: dict, callback: str) -> dic
         ],
         'clients': [
             client('im19-resource', credentials['introspection_secret'], []),
-            client('im19-browser', credentials['browser_secret'], [mcp + '/oauth/browser/callback']),
+            client('im19-browser', credentials['browser_secret'],
+                   [mcp + '/oauth/browser/callback', mcp + '/approve/write/callback']),
             client('im19-chatgpt', credentials['chatgpt_secret'], [callback]),
         ],
         'users': [{'username': 'im19', 'enabled': True, 'firstName': 'IM19', 'lastName': 'Developer',
