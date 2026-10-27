@@ -30,6 +30,19 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
+## ARUSIA v9 — deterministic workflow foundation (staging)
+
+The **optional** ARUSIA production planner persists a user-scoped shot-stage DAG
+in PostgreSQL and exposes MCP planning, creation and status tools. It does **not**
+call ComfyUI, Blender, FFmpeg or image services, approve its own creative work,
+or claim that any MP4 has been rendered. Write to the internal workflow database
+is disabled unless `IM19_ENABLE_ARUSIA_WORKFLOWS=true`. Approval and job leases
+are accessible only through a trusted local operator CLI, not AI-exposed tools.
+
+See [ARUSIA workflow specification](docs/ARUSIA_WORKFLOW_V9.md) and the
+[one-shot example](docs/ARUSIA_SAMPLE_SHOT.json). This release is proposed in
+a stacked PR based on the experimental Write Approval PR #15.
+
 ## Codespaces plugin connection setup
 
 For an isolated PostgreSQL + Keycloak OAuth test environment, use the
