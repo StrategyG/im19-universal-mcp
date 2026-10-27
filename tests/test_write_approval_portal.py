@@ -207,3 +207,73 @@ async def test_browser_approval_routes_and_origin_protection(data, monkeypatch):
                                  data={"request": request_key, "csrf": csrf, "decision": "approve"})
         assert good.status_code == 200
         assert "Persetujuan tersimpan" in good.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_returns_approval_link_and_executes_only_after_browser_choice(
+    data, monkeypatch,
+):
+    from mcp import Client
+    from mcp.server import MCPServer
+    from im19_mcp.server import register_tools
+
+    cfg, vault = data
+    monkeypatch.setenv("IM19_DEV_SUBJECT", "alice")
+    hits = []
+
+    class ScopedGoogleOAuth:
+        async def access_token(self, subject, required, *, service):
+            from im19_mcp.google_oauth import SCOPES
+            assert subject == "alice" and service == "drive"
+            assert required == set(SCOPES["drive_write"])
+            return "google-A", "scoped-token"
+
+    class FakeDrive:
+        def __init__(self, token):
+            assert token == "scoped-token"
+
+        async def create_folder(self, name):
+            hits.append(name)
+            return {"id": "folder_ABCDE", "name": name, "verified": True}
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake_token)) as upstream:
+        portal = WriteApprovalPortal(cfg, vault, FakeVerifier(), upstream)
+        server = MCPServer("browser approval integration")
+        register_tools(server, settings=cfg, vault=vault, oauth=ScopedGoogleOAuth(),
+                       allow_stdio_dev=True, drive_factory=FakeDrive,
+                       write_approval_portal=portal)
+        async with Client(server) as mcp:
+            pending_call = await mcp.call_tool("drive_create_folder", {"name": "Episode 01"})
+            import json
+            def unpack(value):
+                return (value.structured_content if value.structured_content is not None
+                        else json.loads(value.content[0].text))
+            pending = unpack(pending_call)
+            assert pending["status"] == "APPROVAL_REQUIRED"
+            assert pending["approval_url"].startswith("https://mcp.test/approve/write?")
+            assert "approval_token" not in pending
+            assert hits == []
+            request_id = pending["approval_request_id"]
+            premature = unpack(await mcp.call_tool("drive_create_folder", {
+                "name": "Episode 01", "approval_request_id": request_id,
+            }))
+            assert premature["status"] == "APPROVAL_PENDING_OR_USED"
+            assert hits == []
+
+            login, cookie = portal.begin(request_id)
+            state = parse_qs(urlsplit(login).query)["state"][0]
+            key, csrf, _ = await portal.callback(
+                state=state, code="synthetic", cookie=cookie)
+            portal.decide(request_key=key, cookie=cookie, csrf=csrf, decision="approve")
+
+            ok = unpack(await mcp.call_tool("drive_create_folder", {
+                "name": "Episode 01", "approval_request_id": request_id,
+            }))
+            assert ok["status"] == "SUCCEEDED"
+            assert ok["verified"] is True
+            assert "approval_token" not in ok
+            repeated = unpack(await mcp.call_tool("drive_create_folder", {
+                "name": "Episode 01", "approval_request_id": request_id,
+            }))
+            assert repeated["status"] == "APPROVAL_PENDING_OR_USED"
+            assert hits == ["Episode 01"]
