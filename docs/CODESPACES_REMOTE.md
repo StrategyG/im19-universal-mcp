@@ -97,3 +97,41 @@ python -m im19_mcp.codespaces down
 - https://www.keycloak.org/server/importExport
 - https://www.keycloak.org/server/hostname
 - https://developers.openai.com/plugins/build/auth
+
+## Diagnose ChatGPT MCP initialization failures
+
+Update/install the current checkout first; the Python module is `im19_mcp`:
+
+```bash
+git pull --ff-only origin main
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
+python -m im19_mcp.codespaces verify-public
+```
+
+Public verification now checks issuer endpoints/PKCE, exact MCP resource and
+issuer discovery, DB readiness and the POST authentication challenge. A GitHub
+login redirect, wrong URL or missing OAuth discovery fails with a fixed reason.
+Use the `server_url` ending in `/mcp` from local connection.json; port 8080 is
+only the issuer. Set BOTH forwarded ports Public. No repository visibility
+change is necessary.
+
+To test authenticated MCP initialization, tools/list and a harmless local
+connection-status invocation, obtain a short-lived access token through the
+registered Authorization Code + PKCE flow. A client secret, login password or
+Google token is NOT an MCP access token. Enter the token without echo/history:
+
+```bash
+read -rsp 'Short-lived MCP access token: ' IM19_MCP_TEST_TOKEN; echo
+export IM19_MCP_TEST_TOKEN
+python -m im19_mcp.codespaces verify-mcp
+unset IM19_MCP_TEST_TOKEN
+```
+
+Never paste tokens into chat. The probe prints only fixed failure reasons and
+acceptance flags. It does not send provider requests, authenticate ChatGPT on
+your behalf, or establish production acceptance. `mcp_protocol_verified: true`
+is independent from `chatgpt_connected_verified`, which remains false until a
+real ChatGPT invocation is observed. OAuth login failures still need separate
+issuer/callback investigation. Do not delete state or volumes to resolve an
+initialization error; that would lose persisted keys/accounts.

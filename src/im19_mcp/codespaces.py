@@ -5,18 +5,19 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import runpy
 import secrets
+import shutil
+
 # Trusted operations CLI; no subprocess invocation is exposed through MCP.
 import subprocess  # nosec B404
-import shutil
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from cryptography.fernet import Fernet
 import httpx
+from cryptography.fernet import Fernet
 
 CALLBACK = 'https://chatgpt.com/connector_platform_oauth_redirect'
 KEYCLOAK_IMAGE = 'quay.io/keycloak/keycloak:26.8.1'
@@ -239,18 +240,87 @@ def local_checks(settings: dict, timeout: float = 120) -> None:
 
 
 def verify_public(settings: dict) -> None:
+    """Validate discovery and auth challenge, not merely process readiness."""
+    issuer = settings['issuer_origin'] + '/realms/im19'
+    resource = settings['mcp_origin'] + '/mcp'
     with httpx.Client(timeout=15, follow_redirects=False) as client:
-        auth = client.get(settings['issuer_origin'] + '/realms/im19/.well-known/openid-configuration')
-        ready = client.get(settings['mcp_origin'] + '/ready')
-        denied = client.get(settings['mcp_origin'] + '/mcp')
-        if (auth.status_code != 200 or auth.json().get('issuer') != settings['issuer_origin'] + '/realms/im19'
-                or ready.status_code != 200 or denied.status_code != 401):
-            raise RuntimeError('public_endpoints_not_verified_check_Port_visibility_and_OAuth')
+        def document(url, reason):
+            response = client.get(url)
+            if response.status_code != 200:
+                raise RuntimeError(reason)
+            try:
+                body = response.json()
+            except ValueError:
+                raise RuntimeError(reason) from None
+            if not isinstance(body, dict):
+                raise RuntimeError(reason)
+            return body
+        auth = document(issuer + '/.well-known/openid-configuration', 'issuer_discovery_unavailable')
+        if (auth.get('issuer') != issuer or
+                any(not isinstance(auth.get(key), str) or not auth[key].startswith(issuer + '/')
+                    for key in ('authorization_endpoint', 'token_endpoint')) or
+                not isinstance(auth.get('code_challenge_methods_supported'), list) or
+                'S256' not in auth['code_challenge_methods_supported']):
+            raise RuntimeError('issuer_metadata_invalid')
+        metadata = document(settings['mcp_origin'] + '/.well-known/oauth-protected-resource/mcp',
+                            'mcp_discovery_unavailable')
+        if (metadata.get('resource') != resource or not isinstance(metadata.get('authorization_servers'), list)
+                or issuer not in metadata['authorization_servers'] or not isinstance(metadata.get('scopes_supported'), list)
+                or 'im19:read' not in metadata['scopes_supported']):
+            raise RuntimeError('mcp_metadata_invalid')
+        if client.get(settings['mcp_origin'] + '/ready').status_code != 200:
+            raise RuntimeError('gateway_database_not_ready')
+        denied = client.post(resource, headers={'Accept': 'application/json, text/event-stream'},
+                             json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}})
+        challenge = denied.headers.get('www-authenticate', '')
+        if denied.status_code != 401 or 'resource_metadata=' not in challenge:
+            raise RuntimeError('mcp_auth_challenge_invalid')
+
+
+def verify_mcp(settings: dict, token: str) -> None:
+    """Exercise the public authenticated protocol without exposing a token."""
+    if not token or any(char.isspace() for char in token):
+        raise RuntimeError('mcp_test_token_required')
+    resource = settings['mcp_origin'] + '/mcp'
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/json, text/event-stream',
+               'Mcp-Protocol-Version': '2025-11-25'}
+    with httpx.Client(timeout=20, follow_redirects=False, headers=headers) as client:
+        def request(identifier, method, params):
+            response = client.post(resource, json={'jsonrpc': '2.0', 'id': identifier,
+                                                   'method': method, 'params': params})
+            if response.status_code != 200:
+                raise RuntimeError('mcp_' + method.replace('/', '_') + '_failed')
+            try:
+                body = response.json()
+            except ValueError:
+                raise RuntimeError('mcp_json_response_required') from None
+            if (not isinstance(body, dict) or body.get('jsonrpc') != '2.0' or body.get('id') != identifier
+                    or not isinstance(body.get('result'), dict) or 'error' in body):
+                raise RuntimeError('mcp_protocol_response_invalid')
+            return body['result']
+        initialized = request(1, 'initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
+                             'clientInfo': {'name': 'im19-deployment-check', 'version': '1'}})
+        version = initialized.get('protocolVersion')
+        if not isinstance(version, str) or not isinstance(initialized.get('capabilities'), dict):
+            raise RuntimeError('mcp_initialization_invalid')
+        client.headers['Mcp-Protocol-Version'] = version
+        notified = client.post(resource, json={'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        if notified.status_code != 202:
+            raise RuntimeError('mcp_initialization_notification_failed')
+        tools = request(2, 'tools/list', {}).get('tools')
+        if (not isinstance(tools, list) or not tools or
+                any(not isinstance(tool, dict) or not isinstance(tool.get('name'), str)
+                    or not isinstance(tool.get('inputSchema'), dict) for tool in tools) or
+                'get_connection_status' not in {tool['name'] for tool in tools}):
+            raise RuntimeError('mcp_tools_invalid')
+        result = request(3, 'tools/call', {'name': 'get_connection_status', 'arguments': {'service': 'drive'}})
+        if result.get('isError') or not isinstance(result.get('content'), list) or not result['content']:
+            raise RuntimeError('mcp_tool_response_invalid')
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='Isolated IM19 Codespaces OAuth demo; not production hosting')
-    parser.add_argument('action', choices=['configure', 'up', 'verify-public', 'down'])
+    parser.add_argument('action', choices=['configure', 'up', 'verify-public', 'verify-mcp', 'down'])
     parser.add_argument('--mcp-origin')
     parser.add_argument('--issuer-origin')
     parser.add_argument('--chatgpt-callback', default=CALLBACK)
@@ -294,19 +364,30 @@ def main(argv=None) -> int:
             probe(root)
         elif args.action == 'down':
             compose(root, 'down')  # deliberately keep both volumes and all keys
-        elif args.action == 'verify-public':
+        elif args.action in {'verify-public', 'verify-mcp'}:
+            phase = 'public_discovery'
             verify_public(settings)
+            if args.action == 'verify-mcp':
+                phase = 'authenticated_mcp'
+                verify_mcp(settings, os.environ.get('IM19_MCP_TEST_TOKEN', ''))
         print(json.dumps({'status': 'OK', 'action': args.action,
             'server_url': settings['mcp_origin'] + '/mcp',
             'local_credentials_file': STATE + '/connection.json',
-            'public_access_verified': args.action == 'verify-public',
+            'public_access_verified': args.action in {'verify-public', 'verify-mcp'},
+            'mcp_protocol_verified': args.action == 'verify-mcp',
             'chatgpt_connected_verified': False, 'production_acceptance': False}))
         return 0
     except (OSError, ValueError, RuntimeError, AssertionError, httpx.HTTPError) as exc:
         controlled = {'login_page_unavailable', 'login_form_missing', 'login_not_completed',
                       'code_exchange_failed', 'code_replay_not_rejected', 'issuer_identification_missing',
                       'valid_token_not_verified', 'replayed_session_token_still_active', 'token_claim_contract_invalid'}
-        reason = str(exc) if isinstance(exc, AssertionError) and str(exc) in controlled else type(exc).__name__
+        controlled.update({'issuer_discovery_unavailable', 'issuer_metadata_invalid', 'mcp_discovery_unavailable',
+                          'mcp_metadata_invalid', 'gateway_database_not_ready', 'mcp_auth_challenge_invalid',
+                          'mcp_test_token_required', 'mcp_initialize_failed', 'mcp_tools_list_failed',
+                          'mcp_tools_call_failed', 'mcp_json_response_required', 'mcp_protocol_response_invalid',
+                          'mcp_initialization_invalid', 'mcp_initialization_notification_failed',
+                          'mcp_tools_invalid', 'mcp_tool_response_invalid'})
+        reason = str(exc) if str(exc) in controlled else type(exc).__name__
         print(json.dumps({'status': 'SETUP_FAILED', 'phase': phase, 'reason': reason, 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
         return 1
 
