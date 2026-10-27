@@ -23,8 +23,10 @@ from starlette.concurrency import run_in_threadpool
 from im19_mcp.config import Settings
 from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
-from im19_mcp.drive import DriveClient
+from im19_mcp.drive import DriveClient, validate_folder_name
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError, SCOPES
+from im19_mcp.governance.approvals import ApprovalDenied, ApprovalLedger, DuplicateExecution
+from im19_mcp.governance.write_approval import WriteApprovalPortal
 from im19_mcp.registry import SERVICES, list_services
 from im19_mcp.storage import Vault
 from im19_mcp.youtube import ProviderError, YouTubeClient
@@ -60,8 +62,13 @@ def register_tools(
     drive_factory: Callable[[str], DriveClient] = DriveClient,
     distributed_quota: DistributedQuota | None = None,
     browser_auth=None,
+    approval_ledger: ApprovalLedger | None = None,
+    write_approval_portal: WriteApprovalPortal | None = None,
 ) -> None:
-    """Register read-only tools. Service credentials stay in the encrypted vault."""
+    """Register read tools plus opt-in approval-gated Drive creation."""
+    ledger = approval_ledger if approval_ledger is not None else (
+        ApprovalLedger(vault) if vault is not None and vault.audit_salt else None
+    )
 
     def subject() -> str | None:
         return authenticated_subject(allow_stdio_dev=allow_stdio_dev)
@@ -131,6 +138,9 @@ def register_tools(
             response["elevated_scopes"] = {
                 "drive_read_file": list(SCOPES["drive_content"])
             }
+            response["elevated_scopes"]["drive_create_folder"] = list(SCOPES["drive_write"])
+            response["write_requires_approval"] = True
+            response["write_default_disabled"] = not settings.enable_approved_drive_writes
             response["restricted_scope_notice"] = (
                 "drive.readonly is a Google restricted scope, requested only via "
                 "include_content=True; compliance verification may be required."
@@ -174,7 +184,8 @@ def register_tools(
     @server.tool(name="request_service_authorization")
     @backend_guard
     def request_service_authorization(
-        service: str, include_analytics: bool = False, include_content: bool = False
+        service: str, include_analytics: bool = False, include_content: bool = False,
+        include_write: bool = False,
     ) -> dict:
         """Create Google OAuth URL; content access requires explicit opt-in and review."""
         user = subject()
@@ -190,11 +201,13 @@ def register_tools(
         try:
             if browser_auth is not None:
                 return browser_auth.ticket(user, service, analytics=include_analytics,
-                                           include_content=include_content)
+                                           include_content=include_content,
+                                           **({"include_write": True} if include_write else {}))
             if settings.deployment_environment == "production" and not allow_stdio_dev:
                 return {"status": "NOT_CONFIGURED", "reason": "authenticated_browser_required"}
             return oauth.begin(user, service=service, analytics=include_analytics,
-                              include_content=include_content)
+                              include_content=include_content,
+                              **({"include_write": True} if include_write else {}))
         except (ValueError, PermissionError):
             return {"status": "DENY", "reason": "oauth_request_invalid"}
 
@@ -310,6 +323,135 @@ def register_tools(
             "drive_get_metadata", "drive", set(SCOPES["drive_metadata"]),
             lambda c: c.metadata(file_id), drive_factory,
         )
+
+    @server.tool(name="drive_create_folder")
+    async def drive_create_folder(name: str, approval_request_id: str = "",
+                                  idempotency_key: str = "", approval_token: str = "") -> dict:
+        """Opt-in Drive root-folder write. Requires out-of-band, one-time approval.
+
+        Approval issuance is NEVER exposed as an MCP tool. Human review must
+        precede issuance by a separately authenticated trusted operator.
+        """
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if not settings.enable_approved_drive_writes:
+            return {"status": "FEATURE_DISABLED", "reason": "operator_write_opt_in_required"}
+        if oauth is None or ledger is None:
+            return {"status": "NOT_CONFIGURED", "reason": "oauth_or_governance_unavailable"}
+        try:
+            validate_folder_name(name)
+        except ValueError:
+            return {"status": "INVALID_ARGUMENT", "reason": "drive_folder_name_invalid"}
+        if not approval_request_id and not approval_token and write_approval_portal is None:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_portal_not_configured"}
+        denied = await async_tool_quota(user, "mcp:provider-writes", limit=10)
+        if denied is not None:
+            return denied
+        # Check fresh per-file write consent BEFORE consuming the approval.
+        try:
+            account_id, access = await oauth.access_token(
+                user, set(SCOPES["drive_write"]), service="drive",
+            )
+        except OAuthError as exc:
+            return {"status": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "storage_unavailable"}
+        if approval_token and not allow_stdio_dev:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_required"}
+        if write_approval_portal is not None and not approval_request_id and not approval_token:
+            try:
+                return await run_in_threadpool(
+                    write_approval_portal.request, subject=user, account_id=account_id, name=name,
+                )
+            except (SQLAlchemyError, InvalidToken, OSError):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+        if approval_request_id:
+            if write_approval_portal is None:
+                return {"status": "NOT_CONFIGURED", "reason": "write_approval_portal_required"}
+            try:
+                approval_token, idempotency_key = await run_in_threadpool(
+                    write_approval_portal.consume,
+                    ticket=approval_request_id, subject=user, account_id=account_id, name=name,
+                )
+            except PermissionError as exc:
+                reasons = {
+                    "write_approval_denied": "APPROVAL_DENIED",
+                    "write_approval_expired": "APPROVAL_EXPIRED",
+                    "write_approval_pending_or_consumed": "APPROVAL_PENDING_OR_USED",
+                    "write_approval_scope_mismatch": "APPROVAL_INVALID",
+                }
+                return {"status": reasons.get(str(exc), "APPROVAL_INVALID")}
+            except (SQLAlchemyError, InvalidToken, OSError):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+        if not approval_token or not idempotency_key:
+            return {"status": "APPROVAL_REQUIRED", "reason": "browser_approval_required"}
+        payload = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+        try:
+            reservation = await run_in_threadpool(
+                ledger.reserve,
+                token=approval_token, subject=user, provider="drive",
+                account_id=account_id, action="drive.create_folder",
+                resource_id="root", payload=payload, idempotency_key=idempotency_key,
+            )
+        except DuplicateExecution:
+            return {"status": "DUPLICATE_REQUEST", "reason": "manual_reconciliation_required"}
+        except ApprovalDenied:
+            return {"status": "APPROVAL_REQUIRED", "reason": "approval_invalid_or_expired"}
+        except ValueError:
+            return {"status": "INVALID_ARGUMENT", "reason": "approval_or_idempotency_invalid"}
+        except (SQLAlchemyError, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "governance_unavailable"}
+        try:
+            result = await drive_factory(access).create_folder(name)
+            if not isinstance(result, dict) or result.get("verified") is not True:
+                raise ProviderError("WRITE_VERIFICATION_FAILED")
+        except Exception:
+            # A POST may have reached Google before a timeout or crash.
+            # Reservation intentionally stays RESERVED; never auto-retry.
+            return {"status": "UNKNOWN_OUTCOME", "reservation_id": reservation.reservation_id,
+                    "reason": "manual_provider_reconciliation_required"}
+        try:
+            confirmed = await run_in_threadpool(
+                ledger.finalize, reservation_id=reservation.reservation_id,
+                subject=user, outcome="SUCCEEDED",
+            )
+        except (SQLAlchemyError, OSError):
+            confirmed = False
+        if not confirmed:
+            return {"status": "PENDING_VERIFICATION", "reservation_id": reservation.reservation_id,
+                    "reason": "governance_finalization_required"}
+        return {"status": "SUCCEEDED", "service": "drive", "account_id": account_id,
+                "reservation_id": reservation.reservation_id,
+                "data": result, "verified": True}
+
+    @server.tool(name="drive_get_write_approval_status")
+    async def drive_get_write_approval_status(approval_request_id: str) -> dict:
+        """Check the current user's pending Drive write approval without executing it."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if not settings.enable_approved_drive_writes:
+            return {"status": "FEATURE_DISABLED"}
+        if oauth is None or write_approval_portal is None:
+            return {"status": "NOT_CONFIGURED", "reason": "browser_approval_portal_required"}
+        denied = await async_tool_quota(user, "mcp:write-approval-status", limit=30)
+        if denied is not None:
+            return denied
+        try:
+            account_id, _ = await oauth.access_token(
+                user, set(SCOPES["drive_write"]), service="drive",
+            )
+            return await run_in_threadpool(
+                write_approval_portal.status, ticket=approval_request_id,
+                subject=user, account_id=account_id,
+            )
+        except OAuthError as exc:
+            return {"status": str(exc)}
+        except (PermissionError, ValueError):
+            return {"status": "APPROVAL_INVALID"}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
 
     @server.tool(name="drive_read_file")
     async def drive_read_file(file_id: str) -> dict:

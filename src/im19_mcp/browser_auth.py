@@ -39,9 +39,10 @@ class BrowserAuthorization:
         self.origin = "https://" + urlsplit(settings.mcp_resource).netloc
 
     def ticket(self, subject: str, service: str, *, analytics: bool = False,
-               include_content: bool = False) -> dict:
+               include_content: bool = False, include_write: bool = False) -> dict:
         scopes = GoogleOAuth.requested_scopes(service, analytics=analytics,
-                                              include_content=include_content)
+                                              include_content=include_content,
+                                              include_write=include_write)
         ticket = secrets.token_urlsafe(32)
         self.vault.create_state(ticket, subject, scopes, secrets.token_urlsafe(48),
                                 time.time() + 600, service=service, purpose="browser-ticket")
@@ -100,5 +101,6 @@ class BrowserAuthorization:
         return await run_in_threadpool(
             self.oauth.begin, subject, service=service,
             analytics=SCOPES["youtube_analytics"][0] in scopes,
-            include_content=SCOPES["drive_content"][0] in scopes, browser_hash=digest,
+            include_content=SCOPES["drive_content"][0] in scopes,
+            include_write=SCOPES["drive_write"][0] in scopes, browser_hash=digest,
         )

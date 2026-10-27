@@ -1,4 +1,4 @@
-"""Read-only Google Drive v3 connector with bounded responses and fixed Google API origin.
+"""Scoped Google Drive v3 connector with bounded responses and fixed Google API origin.
 
 File listing requires drive.metadata.readonly. Reading textual file content
 requires separately consented restricted drive.readonly scope, enforced by the
@@ -12,7 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from im19_mcp.youtube import ProviderError
-from im19_mcp.outbound import ResponseTooLarge, json_object, request_bytes
+from im19_mcp.outbound import ResponseTooLarge, json_object, request_bytes, request_json
 
 DRIVE_URL = "https://www.googleapis.com/drive/v3/files"
 METADATA_FIELDS = "id,name,mimeType,size,modifiedTime,parents,webViewLink,description"
@@ -40,8 +40,18 @@ def _literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def validate_folder_name(name: str) -> str:
+    """Validate a root-folder name before consuming a one-time approval."""
+    if (not isinstance(name, str) or not 1 <= len(name) <= 128 or
+            name.strip() != name or name in {".", ".."} or
+            any(ord(ch) < 32 or ord(ch) == 127 or ch in ("/", "\\")
+                for ch in name)):
+        raise ValueError("drive_folder_name_invalid")
+    return name
+
+
 class DriveClient:
-    """Metadata discovery and opt-in text-only reading; never mutates files."""
+    """Read operations and an approval-gated, narrowly scoped folder creation primitive."""
 
     def __init__(self, access_token: str, client: httpx.AsyncClient | None = None):
         if not access_token:
@@ -127,6 +137,48 @@ class DriveClient:
             DRIVE_URL + "/" + quote(file_id, safe=""),
             {"fields": METADATA_FIELDS, "supportsAllDrives": "true"},
         )
+
+    async def create_folder(self, name: str) -> dict:
+        """Create one folder in My Drive root; caller MUST have a consumed approval.
+
+        The Drive API is not generally idempotent. Never retry this POST
+        automatically after an ambiguous outcome. Verify using GET metadata.
+        Requires separately consented `drive.file` scope.
+        """
+        validate_folder_name(name)
+        try:
+            result = await request_json(
+                "POST", DRIVE_URL, client=self._client, timeout=12,
+                max_bytes=MAX_RESPONSE_BYTES,
+                params={"fields": "id,name,mimeType"},
+                json={"name": name, "mimeType": "application/vnd.google-apps.folder"},
+                headers={"Authorization": f"Bearer {self._token}",
+                         "Accept": "application/json"},
+            )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            reason = ("AUTH_REQUIRED" if status == 401 else
+                      "SCOPE_OR_FILE_ACCESS_DENIED" if status == 403 else
+                      "RATE_LIMITED" if status == 429 else "PROVIDER_ERROR")
+            raise ProviderError(reason) from exc
+        except ResponseTooLarge as exc:
+            raise ProviderError("RESPONSE_SIZE_LIMIT_EXCEEDED") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProviderError("WRITE_OUTCOME_UNKNOWN") from exc
+        folder_id = result.get("id")
+        if (not isinstance(folder_id, str) or not _ID.fullmatch(folder_id) or
+                result.get("name") != name or
+                result.get("mimeType") != "application/vnd.google-apps.folder"):
+            raise ProviderError("WRITE_OUTCOME_UNKNOWN")
+        # An acknowledged POST is not sufficient proof of durable creation.
+        # A later GET establishes observable postconditions.
+        observed = await self.metadata(folder_id)
+        if (observed.get("id") != folder_id or observed.get("name") != name or
+                observed.get("mimeType") != "application/vnd.google-apps.folder"):
+            raise ProviderError("WRITE_VERIFICATION_FAILED")
+        return {"id": folder_id, "name": name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "verified": True}
 
     async def read_text(self, file_id: str) -> dict:
         """Opt-in content access: text files or Google Docs exported as plain text.

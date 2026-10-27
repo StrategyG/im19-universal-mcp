@@ -28,6 +28,7 @@ SCOPES = {
     "youtube_analytics": ("https://www.googleapis.com/auth/yt-analytics.readonly",),
     "drive_metadata": ("https://www.googleapis.com/auth/drive.metadata.readonly",),
     "drive_content": ("https://www.googleapis.com/auth/drive.readonly",),
+    "drive_write": ("https://www.googleapis.com/auth/drive.file",),
 }
 OPENID = "openid"
 
@@ -47,7 +48,8 @@ class GoogleOAuth:
 
     def begin(
         self, subject: str, *, service: str = "youtube",
-        analytics: bool = False, include_content: bool = False, browser_hash: str = "",
+        analytics: bool = False, include_content: bool = False, include_write: bool = False,
+        browser_hash: str = "",
     ) -> dict:
         """Request only scopes needed by this service and explicit elevated options.
 
@@ -55,7 +57,8 @@ class GoogleOAuth:
         """
         if not subject:
             raise PermissionError("authenticated_subject_required")
-        scopes = self.requested_scopes(service, analytics=analytics, include_content=include_content)
+        scopes = self.requested_scopes(service, analytics=analytics,
+                                       include_content=include_content, include_write=include_write)
         verifier = secrets.token_urlsafe(48)
         state = secrets.token_urlsafe(32)
         challenge = base64.urlsafe_b64encode(
@@ -80,14 +83,16 @@ class GoogleOAuth:
 
     @staticmethod
     def requested_scopes(service: str, *, analytics: bool = False,
-                         include_content: bool = False) -> tuple[str, ...]:
+                         include_content: bool = False,
+                         include_write: bool = False) -> tuple[str, ...]:
         if service not in {"youtube", "drive"}:
             raise ValueError("google_service_unsupported")
-        if (service != "youtube" and analytics) or (service != "drive" and include_content):
+        if (service != "youtube" and analytics) or (service != "drive" and (include_content or include_write)):
             raise ValueError("google_scope_option_invalid")
         base = SCOPES["youtube"] if service == "youtube" else SCOPES["drive_metadata"]
         elevated = SCOPES["youtube_analytics"] if analytics else SCOPES["drive_content"] if include_content else ()
-        return tuple(sorted(set((OPENID,) + base + elevated)))
+        write = SCOPES["drive_write"] if include_write else ()
+        return tuple(sorted(set((OPENID,) + base + elevated + write)))
 
     @staticmethod
     def _lifetime(value) -> float:

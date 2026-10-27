@@ -1,6 +1,6 @@
 # IM19 Universal MCP — Intelligent Mind 19
 
-**Status: 0.3.0 release candidate for the read-only gateway.** Includes authenticated browser linking, encrypted provider credentials, shared quotas and transactional audit. See the [production readiness report](docs/PRODUCTION_READINESS.md) for executed checks and remaining deployment acceptance. No live Google, YouTube or ChatGPT connection is claimed.
+**Status: 0.3.0 read-only gateway baseline; an opt-in, approval-gated Drive folder creation prototype is under review (not a production write release).** Includes authenticated browser linking, encrypted provider credentials, shared quotas and transactional audit. See the [production readiness report](docs/PRODUCTION_READINESS.md) for executed checks and remaining deployment acceptance. No live Google, YouTube or ChatGPT connection is claimed.
 
 ## Architecture
 
@@ -26,6 +26,7 @@ The ChatGPT-to-MCP OAuth issuer and the Google OAuth provider are **two separate
 - `youtube_get_channel`, `youtube_list_videos`, `youtube_get_analytics` (read-only, require valid stored provider tokens and respective scopes).
 - `drive_search_files`, `drive_list_folder`, `drive_get_metadata` (read-only, separate Drive OAuth and metadata scope).
 - `drive_read_file` (bounded text only, requires **explicit restricted drive.readonly** consent; unsupported MIME and binary/PDF/EPUB return an error).
+- `drive_create_folder` (**disabled by default**; asks the user to approve in a browser after IM19 OAuth login, with separate Drive `drive.file` consent, server-held one-time approval, idempotency reservation and read-after-write verification; [limitations](docs/DRIVE_WRITE.md)).
 
 Other providers are registered as **not implemented**, not falsely advertised as connected.
 
@@ -98,7 +99,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - Provider token documents and PKCE verifiers are encrypted using Fernet.
 - **Offline Fernet key rotation** supports temporary previous-key reads during isolated migration, transactional re-encryption of all credential/PKCE/pending-link records, and primary-only coverage checks. **Production gateways reject old-key fallbacks**; no online rotation or managed KMS is claimed.
 - Access controls deny cross-user/cross-account access and missing provider scopes.
-- The MCP service exposes **no provider mutation tools**. Phase 6 now contains a **database-backed one-time approval + idempotency reservation ledger**, with atomic audit events. **Trusted human portal and actual write adapters remain unimplemented**; they must be independently authenticated before any future write execution.
+- The default MCP configuration **disables provider mutations**. An experimental, approval-gated `drive_create_folder` tool exists but is disabled without explicit operator opt-in. Phase 6 now contains a **database-backed one-time approval + idempotency reservation ledger**, with atomic audit events. **A trusted human approval portal and general write adapters remain unimplemented**; they must be independently authenticated before any future write execution.
 - Production linking first authenticates the browser at the configured MCP issuer using a dedicated confidential client, Authorization Code + PKCE, resource-bound token introspection and exact subject/client matching. A secure HttpOnly SameSite cookie binds both callbacks. A ticket alone cannot authenticate a user.
 - OAuth callback states are bound to a specific provider service, purpose and browser, atomically single-use, and expire after 10 minutes.
 - Google callbacks store credentials in an encrypted pending vault, never as a connected account. The user must confirm a one-time code (5-minute TTL) from the browser via the authenticated MCP tool.
@@ -119,6 +120,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - [Offline credential encryption key rotation](docs/KEY_ROTATION.md)
 - [Distributed gateway and verified-user quotas](docs/DISTRIBUTED_QUOTAS.md)
 - [Google Drive connector and scope policy](docs/DRIVE_CONNECTOR.md)
+- [Drive write prototype and acceptance limits](docs/DRIVE_WRITE.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Google OAuth setup](docs/OAUTH_SETUP.md)
 - [ChatGPT integration](docs/CHATGPT_INTEGRATION.md)
@@ -126,5 +128,5 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - [Security checklist](docs/SECURITY_CHECKLIST.md)
 - [Acceptance report](docs/ACCEPTANCE_REPORT.md)
 
-Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains an internal primitive; provider write adapters and a human write-approval portal are outside this read-only release.
+Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
