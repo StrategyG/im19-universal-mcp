@@ -94,7 +94,7 @@ def parse_manifest(payload: str) -> tuple[dict[str, Any], str]:
         raise WorkflowError("manifest_json_invalid") from None
     if not isinstance(raw, dict) or set(raw) != {"schema_version", "episode", "fps", "shots"}:
         raise WorkflowError("manifest_schema_invalid")
-    if raw["schema_version"] != "arus ia.v9.0".replace(" ", ""):
+    if raw["schema_version"] != "arusia.v9.0":
         raise WorkflowError("manifest_version_invalid")
     code = _string(raw["episode"], CODE, "episode_code_invalid")
     if type(raw["fps"]) is not int or raw["fps"] != 24:
