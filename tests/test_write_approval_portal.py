@@ -2,20 +2,16 @@
 
 These are mocked identity-provider/Google tests. No live write is claimed.
 """
-from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from cryptography.fernet import Fernet
-from mcp import Client
-from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken
 
 from im19_mcp.config import Settings
-from im19_mcp.governance.approvals import ApprovalDenied, ApprovalLedger, payload_sha256
-from im19_mcp.governance.write_approval import WriteApprovalPortal, digest, WriteApprovalRequest
-from im19_mcp.server import register_tools
+from im19_mcp.governance.approvals import ApprovalLedger
+from im19_mcp.governance.write_approval import WriteApprovalPortal
 from im19_mcp.storage import Vault
 
 
@@ -170,7 +166,7 @@ async def test_approval_bound_to_exact_account_subject_and_payload(portal):
 
 @pytest.mark.asyncio
 async def test_browser_approval_routes_and_origin_protection(data, monkeypatch):
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
     from im19_mcp.gateway import create_app, IntrospectionVerifier
 
     cfg, _vault = data
@@ -201,7 +197,6 @@ async def test_browser_approval_routes_and_origin_protection(data, monkeypatch):
         assert callback.status_code == 200
         assert "form-action 'self'" in callback.headers["Content-Security-Policy"]
         assert "Preview" in callback.text
-        from html.parser import HTMLParser
         import re
         request_key = re.search(r"name='request' value='([^']+)'", callback.text).group(1)
         csrf = re.search(r"name='csrf' value='([^']+)'", callback.text).group(1)
