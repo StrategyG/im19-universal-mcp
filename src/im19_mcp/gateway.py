@@ -9,7 +9,7 @@ import logging
 import math
 import time
 from contextlib import asynccontextmanager
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 import httpx
 import uvicorn
@@ -23,7 +23,7 @@ from pydantic import AnyHttpUrl
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, HTMLResponse
 
 from im19_mcp.config import Settings
 from im19_mcp import __version__
@@ -31,6 +31,7 @@ from im19_mcp.browser_auth import BrowserAuthorization, COOKIE_NAME, browser_dig
 from im19_mcp.http_security import GatewaySecurityMiddleware
 from im19_mcp.outbound import request_json
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError
+from im19_mcp.governance.write_approval import WriteApprovalPortal, WRITE_COOKIE
 from im19_mcp.distributed_quota import DistributedQuota
 from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddleware
 from im19_mcp.readiness import database_ready
@@ -101,6 +102,8 @@ def create_gateway(
     oauth = GoogleOAuth(cfg, vault, require_browser=cfg.deployment_environment == "production") if cfg.google_enabled() else None
     verifier = IntrospectionVerifier(cfg)
     browser = BrowserAuthorization(cfg, vault, oauth, verifier) if oauth and cfg.browser_enabled() else None
+    write_portal = (WriteApprovalPortal(cfg, vault, verifier)
+                    if cfg.enable_approved_drive_writes and cfg.browser_enabled() and oauth else None)
     server = MCPServer(
         "IM19 Universal MCP",
         version=__version__,
@@ -118,7 +121,8 @@ def create_gateway(
         if cfg.deployment_environment == "production" else None
     )
     register_tools(server, settings=cfg, vault=vault, oauth=oauth,
-                   distributed_quota=effective_quota, browser_auth=browser)
+                   distributed_quota=effective_quota, browser_auth=browser,
+                   write_approval_portal=write_portal)
 
     @server.custom_route("/connect/google", methods=["GET"])
     async def browser_start(request: Request):
@@ -153,6 +157,83 @@ def create_gateway(
             return JSONResponse({"status": "OAUTH_FAILED"}, status_code=400)
         except (SQLAlchemyError, InvalidToken):
             return JSONResponse({"status": "SERVICE_UNAVAILABLE"}, status_code=503)
+
+    @server.custom_route("/approve/write", methods=["GET"])
+    async def write_review_start(request: Request):
+        if write_portal is None:
+            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503)
+        if len(request.query_params.getlist("ticket")) != 1:
+            return JSONResponse({"status": "INVALID_REQUEST"}, status_code=400)
+        try:
+            location, cookie = await run_in_threadpool(
+                write_portal.begin, request.query_params["ticket"]
+            )
+        except (PermissionError, ValueError):
+            return JSONResponse({"status": "APPROVAL_INVALID_OR_EXPIRED"}, status_code=403)
+        except (SQLAlchemyError, InvalidToken):
+            return JSONResponse({"status": "SERVICE_UNAVAILABLE"}, status_code=503)
+        response = RedirectResponse(location, status_code=303)
+        response.set_cookie(WRITE_COOKIE, cookie, max_age=300, secure=True,
+                            httponly=True, samesite="lax", path="/")
+        return response
+
+    @server.custom_route("/approve/write/callback", methods=["GET"])
+    async def write_review_callback(request: Request):
+        if write_portal is None:
+            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503)
+        if (request.query_params.get("error") or
+                len(request.query_params.getlist("state")) != 1 or
+                len(request.query_params.getlist("code")) != 1):
+            return JSONResponse({"status": "APPROVAL_LOGIN_INVALID"}, status_code=400)
+        try:
+            key, csrf, name = await write_portal.callback(
+                state=request.query_params["state"], code=request.query_params["code"],
+                cookie=request.cookies.get(WRITE_COOKIE, ""),
+            )
+            return HTMLResponse(write_portal.review_html(request_key=key, csrf=csrf, name=name),
+                                headers={"Cache-Control": "no-store, private"})
+        except (PermissionError, ValueError, httpx.HTTPError):
+            return JSONResponse({"status": "APPROVAL_LOGIN_INVALID"}, status_code=403)
+        except (SQLAlchemyError, InvalidToken):
+            return JSONResponse({"status": "SERVICE_UNAVAILABLE"}, status_code=503)
+
+    @server.custom_route("/approve/write/decision", methods=["POST"])
+    async def write_review_decision(request: Request):
+        if write_portal is None:
+            return JSONResponse({"status": "NOT_CONFIGURED"}, status_code=503)
+        # HTML form POST requires explicit same-origin and CSRF: no MCP/API
+        # client can approve by invoking a tool or by possessing the ticket.
+        if (request.headers.get("origin") != write_portal.origin or
+                not request.headers.get("content-type", "").startswith(
+                    "application/x-www-form-urlencoded"
+                ) or int(request.headers.get("content-length", "0") or 0) > 2048):
+            return JSONResponse({"status": "APPROVAL_DENIED"}, status_code=403)
+        data = await request.body()
+        if len(data) > 2048:
+            return JSONResponse({"status": "APPROVAL_DENIED"}, status_code=403)
+        try:
+            values = parse_qs(data.decode("ascii"), keep_blank_values=True, max_num_fields=5)
+            if any(len(values.get(key, [])) != 1 for key in ("request", "csrf", "decision")):
+                raise ValueError("missing_or_duplicate_fields")
+            decision = await run_in_threadpool(
+                write_portal.decide, request_key=values["request"][0],
+                csrf=values["csrf"][0], decision=values["decision"][0],
+                cookie=request.cookies.get(WRITE_COOKIE, ""),
+            )
+        except (UnicodeError, ValueError, PermissionError):
+            return JSONResponse({"status": "APPROVAL_DENIED"}, status_code=403)
+        except (SQLAlchemyError, InvalidToken):
+            return JSONResponse({"status": "SERVICE_UNAVAILABLE"}, status_code=503)
+        msg = ("Persetujuan tersimpan. Kembali ke percakapan AI dan lanjutkan permintaan."
+               if decision == "APPROVED" else "Permintaan write ditolak. Tidak ada perubahan dilakukan.")
+        response = HTMLResponse(
+            "<!doctype html><html lang='id'><meta charset='utf-8'>"
+            "<title>IM19</title><body><h1>IM19</h1><p>" + msg + "</p></body></html>",
+            headers={"Cache-Control": "no-store, private"},
+        )
+        response.delete_cookie(WRITE_COOKIE, secure=True, httponly=True,
+                               samesite="lax", path="/")
+        return response
 
     @server.custom_route("/health", methods=["GET"])
     async def health(_: Request) -> JSONResponse:
