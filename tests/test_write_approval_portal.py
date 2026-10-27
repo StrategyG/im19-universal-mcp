@@ -277,3 +277,49 @@ async def test_mcp_returns_approval_link_and_executes_only_after_browser_choice(
             }))
             assert repeated["status"] == "APPROVAL_PENDING_OR_USED"
             assert hits == ["Episode 01"]
+
+
+@pytest.mark.asyncio
+async def test_status_fails_closed_for_other_subject_and_reports_human_decision(portal, data):
+    _settings, vault = data
+    pending = portal.request(subject="alice", account_id="google-A", name="Archive")
+    ticket = pending["approval_request_id"]
+    assert portal.status(ticket=ticket, subject="alice", account_id="google-A") == {
+        "status": "APPROVAL_PENDING", "service": "drive", "action": "drive.create_folder",
+    }
+    for bad in [{"subject": "other", "account_id": "google-A"},
+                {"subject": "alice", "account_id": "google-B"}]:
+        with pytest.raises(PermissionError, match="scope_mismatch"):
+            portal.status(ticket=ticket, **bad)
+    login, cookie = portal.begin(ticket)
+    key, csrf, _ = await portal.callback(
+        state=parse_qs(urlsplit(login).query)["state"][0],
+        code="synthetic-code", cookie=cookie,
+    )
+    assert portal.status(ticket=ticket, subject="alice", account_id="google-A")["status"] == "APPROVAL_PENDING"
+    assert portal.decide(request_key=key, cookie=cookie, csrf=csrf,
+                         decision="approve") == "APPROVED"
+    status = portal.status(ticket=ticket, subject="alice", account_id="google-A")
+    assert status == {"status": "APPROVED", "service": "drive", "action": "drive.create_folder"}
+    assert "approval_cipher" not in str(status)
+    portal.consume(ticket=ticket, subject="alice", account_id="google-A", name="Archive")
+    assert portal.status(ticket=ticket, subject="alice", account_id="google-A")["status"] == "APPROVAL_USED"
+
+
+@pytest.mark.asyncio
+async def test_expired_approval_cleanup_without_credentials(portal, data):
+    import time
+    from sqlalchemy import update
+    from im19_mcp.governance.write_approval import WriteApprovalRequest
+
+    _settings, vault = data
+    pending = portal.request(subject="alice", account_id="google-A", name="Old")
+    with vault.sessions.begin() as db:
+        db.execute(update(WriteApprovalRequest).values(expires_at=time.time() - 5))
+    assert portal.status(ticket=pending["approval_request_id"],
+                         subject="alice", account_id="google-A")["status"] == "APPROVAL_EXPIRED"
+    assert WriteApprovalPortal.purge_expired_requests(vault) == 1
+    assert WriteApprovalPortal.purge_expired_requests(vault) == 0
+    with pytest.raises(PermissionError):
+        portal.status(ticket=pending["approval_request_id"],
+                      subject="alice", account_id="google-A")
