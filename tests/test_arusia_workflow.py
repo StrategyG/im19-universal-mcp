@@ -2,6 +2,7 @@
 from dataclasses import replace
 import json
 import time
+import secrets
 
 import pytest
 from cryptography.fernet import Fernet
@@ -12,6 +13,7 @@ from sqlalchemy import select, update
 from im19_mcp.arusia.workflow import (
     ArusiaTask, ArusiaWorkflow, WorkflowError, STAGES, EPISODE_STAGES, parse_manifest, preview,
 )
+from im19_mcp.arusia.artifacts import ArtifactRegistry
 from im19_mcp.config import Settings
 from im19_mcp.server import register_tools
 from im19_mcp.storage import Vault
@@ -33,8 +35,33 @@ def workflow(tmp_path):
     store = Vault("sqlite:///" + str(tmp_path / "arusia.sqlite"),
                   encryption_key=Fernet.generate_key().decode(), audit_salt="arusia-test")
     store.initialize_schema()
-    yield ArusiaWorkflow(store)
+    root = tmp_path / "artifact_store"
+    root.mkdir()
+    yield ArusiaWorkflow(store, root)
     store.engine.dispose()
+
+
+def file_evidence(workflow, subject, asset_id, *, label="verified"):
+    registry = ArtifactRegistry(workflow.vault, workflow.artifact_root)
+    name = secrets.token_hex(8) + ".json"
+    (registry.incoming / name).write_text(json.dumps({"label": label, "asset_id": asset_id}))
+    return registry.ingest(subject, asset_id, name)["sha256"]
+
+
+def evidence_for_task(workflow, subject, task_id):
+    return file_evidence(workflow, subject, "EVIDENCE_" + task_id.upper())
+
+
+def output_for_task(workflow, subject, task_id):
+    return file_evidence(workflow, subject, "TASK_" + task_id.upper())
+
+
+def install_masters(workflow, subject):
+    registry = ArtifactRegistry(workflow.vault, workflow.artifact_root)
+    for asset in ("KIO_MASTER", "HALAMAN_KIO", "HALAMAN_KIO_BG", "BINTANG_PROP"):
+        master = file_evidence(workflow, subject, asset)
+        proof = file_evidence(workflow, subject, "EVIDENCE_" + asset)
+        registry.approve(subject, asset, master, proof)
 
 
 def find_task(workflow, subject, episode_id, stage):
@@ -99,28 +126,32 @@ def test_manual_gate_prevents_automatic_generation_and_reuse(workflow):
     assert info["status"] == "LEASED"
     with pytest.raises(WorkflowError, match="task_not_claimable"):
         workflow.claim("alice", first["task_id"], worker_id="worker-002")
+    verified = output_for_task(workflow, "alice", first["task_id"])
     with pytest.raises(WorkflowError, match="lease_invalid_or_expired"):
-        workflow.complete("alice", first["task_id"], "x" * 43, FAKE_SHA, provenance={})
+        workflow.complete("alice", first["task_id"], "x" * 43, verified, provenance={})
     done = workflow.complete("alice", first["task_id"], info["lease_token"],
-                             FAKE_SHA, provenance={"worker_version": "mock-v1"})
+                             verified, provenance={"worker_version": "mock-v1"})
     assert done["status"] == "WORKER_REPORTED_DONE"
     assert not done["independent_qc_verified"]
     assert find_task(workflow, "alice", eid, "ASSET_LOCK")["status"] == "WAITING_APPROVAL"
     with pytest.raises(WorkflowError):
         workflow.approve("bob", find_task(workflow, "alice", eid, "ASSET_LOCK")["task_id"],
                          evidence_sha256=FAKE_SHA)
-    gate = workflow.approve("alice", find_task(workflow, "alice", eid, "ASSET_LOCK")["task_id"],
-                            evidence_sha256=FAKE_SHA)
+    install_masters(workflow, "alice")
+    gate_id = find_task(workflow, "alice", eid, "ASSET_LOCK")["task_id"]
+    gate_proof = evidence_for_task(workflow, "alice", gate_id)
+    gate = workflow.approve("alice", gate_id, evidence_sha256=gate_proof)
     assert gate["status"] == "APPROVED"
     with pytest.raises(WorkflowError, match="human_gate_not_ready"):
         workflow.approve("alice", find_task(workflow, "alice", eid, "ASSET_LOCK")["task_id"],
-                         evidence_sha256=FAKE_SHA)
+                         evidence_sha256=gate_proof)
     assert find_task(workflow, "alice", eid, "STORYBOARD")["status"] == "READY"
 
 
 def test_lease_expiration_retry_cap_and_fails_closed(workflow):
     eid = workflow.create("alice", sample())["episode_id"]
     task = find_task(workflow, "alice", eid, "SCRIPT_BREAKDOWN")
+    verified = output_for_task(workflow, "alice", task["task_id"])
     for i in range(3):
         attempt = workflow.claim("alice", task["task_id"], worker_id="local-worker")
         with workflow.vault.sessions.begin() as session:
@@ -128,7 +159,7 @@ def test_lease_expiration_retry_cap_and_fails_closed(workflow):
                 ArusiaTask.task_id == task["task_id"]
             ).values(lease_until=time.time() - 1))
         with pytest.raises(WorkflowError, match="lease_invalid_or_expired"):
-            workflow.complete("alice", task["task_id"], attempt["lease_token"], FAKE_SHA, provenance={})
+            workflow.complete("alice", task["task_id"], attempt["lease_token"], verified, provenance={})
         if i == 2:
             with pytest.raises(WorkflowError, match="task_not_claimable"):
                 workflow.claim("alice", task["task_id"], worker_id="local-worker")
@@ -143,8 +174,9 @@ def test_image_provenance_is_mandatory_before_worker_submission(workflow):
         target.status = "READY"
     task = find_task(workflow, "alice", eid, "IMAGE_GENERATION")
     info = workflow.claim("alice", task["task_id"], worker_id="test-worker")
+    verified = output_for_task(workflow, "alice", task["task_id"])
     with pytest.raises(WorkflowError, match="image_generation_provenance_required"):
-        workflow.complete("alice", task["task_id"], info["lease_token"], FAKE_SHA, provenance={})
+        workflow.complete("alice", task["task_id"], info["lease_token"], verified, provenance={})
     good = {
         "model_sha256": FAKE_SHA, "lora_sha256": FAKE_SHA,
         "controlnet_sha256": OTHER_SHA,
@@ -152,7 +184,7 @@ def test_image_provenance_is_mandatory_before_worker_submission(workflow):
         "seed": 123456, "resolution": "1024x576",
     }
     response = workflow.complete("alice", task["task_id"], info["lease_token"],
-                                 FAKE_SHA, provenance=good)
+                                 verified, provenance=good)
     assert response["status"] == "WORKER_REPORTED_DONE"
     assert find_task(workflow, "alice", eid, "FRAME_QC")["status"] == "WAITING_APPROVAL"
 
@@ -210,15 +242,19 @@ def test_full_episode_barrier_waits_for_all_shot_quality_gates(workflow):
                   if t["shot_id"] == "SH001" and t["stage"] == "SHOT_QC")
     qc_two = next(t for t in workflow.inspect("alice", episode_id, limit=100)["tasks"]
                   if t["shot_id"] == "SH002" and t["stage"] == "SHOT_QC")
-    assert workflow.approve("alice", qc_one["task_id"], evidence_sha256=FAKE_SHA)["status"] == "APPROVED"
+    first_proof = evidence_for_task(workflow, "alice", qc_one["task_id"])
+    second_proof = evidence_for_task(workflow, "alice", qc_two["task_id"])
+    assert workflow.approve("alice", qc_one["task_id"], evidence_sha256=first_proof)["status"] == "APPROVED"
     assert find_task(workflow, "alice", episode_id, "EPISODE_COMPOSITE")["status"] == "BLOCKED"
-    assert workflow.approve("alice", qc_two["task_id"], evidence_sha256=FAKE_SHA)["status"] == "APPROVED"
+    assert workflow.approve("alice", qc_two["task_id"], evidence_sha256=second_proof)["status"] == "APPROVED"
     assert find_task(workflow, "alice", episode_id, "EPISODE_COMPOSITE")["status"] == "READY"
     lease = workflow.claim("alice", composite["task_id"], worker_id="rig-worker-1")
     assert lease["status"] == "LEASED"
-    workflow.complete("alice", composite["task_id"], lease["lease_token"], FAKE_SHA,
+    composite_output = output_for_task(workflow, "alice", composite["task_id"])
+    workflow.complete("alice", composite["task_id"], lease["lease_token"], composite_output,
                       provenance={"renderer": "synthetic"})
     assert find_task(workflow, "alice", episode_id, "EPISODE_FINAL_QC")["status"] == "WAITING_APPROVAL"
     final = find_task(workflow, "alice", episode_id, "EPISODE_FINAL_QC")
-    workflow.approve("alice", final["task_id"], evidence_sha256=FAKE_SHA)
+    final_proof = evidence_for_task(workflow, "alice", final["task_id"])
+    workflow.approve("alice", final["task_id"], evidence_sha256=final_proof)
     assert find_task(workflow, "alice", episode_id, "DELIVERY_PACKAGE")["status"] == "READY"
