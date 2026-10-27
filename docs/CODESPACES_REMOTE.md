@@ -135,3 +135,24 @@ is independent from `chatgpt_connected_verified`, which remains false until a
 real ChatGPT invocation is observed. OAuth login failures still need separate
 issuer/callback investigation. Do not delete state or volumes to resolve an
 initialization error; that would lose persisted keys/accounts.
+
+## Write approval and browser permission (optional staging-only)
+
+The generated Codespaces stack includes `IM19_ENABLE_APPROVED_DRIVE_WRITES=false`.
+It must remain disabled until a Google OAuth client with the separate
+`drive.file` consent is configured and the security review is complete.
+
+In approved staging, IM19 first returns `APPROVAL_REQUIRED` with a URL to
+`/approve/write`. Open that link on Android or desktop, complete the IM19
+browser OAuth login, review the exact folder name, and select **Setujui** or
+**Tolak**. The grant stays encrypted in PostgreSQL. The AI re-invokes
+`drive_create_folder` using the returned `approval_request_id` and the
+same folder name; it never receives a ledger grant token.
+
+Before enabling the flag, migrate to Alembic revision `0006_write_approvals`
+and register the exact `/approve/write/callback` URI with Keycloak's
+`im19-browser` client. **Existing Codespaces state is preserved by `up`**;
+changing Python source does not rewrite an existing imported Keycloak realm,
+`stack.env` or `compose.json`. Apply any required OAuth callback/environment
+changes via controlled administration, keeping persistent keys and volumes.
+A successful CI Keycloak probe does not verify live Google writes.
