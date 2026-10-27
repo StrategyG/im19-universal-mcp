@@ -20,6 +20,7 @@ from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from starlette.concurrency import run_in_threadpool
 
+from im19_mcp.arusia.workflow import ArusiaWorkflow, WorkflowError, STAGES, preview
 from im19_mcp.config import Settings
 from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
@@ -69,6 +70,8 @@ def register_tools(
     ledger = approval_ledger if approval_ledger is not None else (
         ApprovalLedger(vault) if vault is not None and vault.audit_salt else None
     )
+
+    arusia_engine = ArusiaWorkflow(vault) if vault is not None else None
 
     def subject() -> str | None:
         return authenticated_subject(allow_stdio_dev=allow_stdio_dev)
@@ -452,6 +455,70 @@ def register_tools(
             return {"status": "APPROVAL_INVALID"}
         except (SQLAlchemyError, InvalidToken, OSError):
             return {"status": "SERVICE_UNAVAILABLE", "reason": "approval_storage_unavailable"}
+
+    @server.resource("im19://arusia/workflow-v9")
+    def arusia_workflow_contract() -> str:
+        """Describe implemented contract; does not claim media workers are live."""
+        return json.dumps({
+            "schema_version": "arusia.v9.0",
+            "feature_enabled": settings.enable_arusia_workflows,
+            "stages": [{"name": name, "kind": kind, "subsystem": subsystem}
+                       for name, kind, subsystem in STAGES],
+            "human_approvals_via_mcp": False,
+            "render_worker_connected": False,
+            "comfyui_connected": False,
+            "blender_connected": False,
+        })
+
+    @server.tool(name="arusia_plan_episode")
+    def arusia_plan_episode(manifest_json: str) -> dict:
+        """Validate an ARUSIA 24fps shot manifest; does not mutate storage."""
+        try:
+            return preview(manifest_json)
+        except (WorkflowError, ValueError):
+            return {"status": "INVALID_MANIFEST", "reason": "manifest_schema_or_values_invalid"}
+
+    @server.tool(name="arusia_create_episode")
+    async def arusia_create_episode(manifest_json: str) -> dict:
+        """Persist internal workflow metadata, NOT generate or publish media."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED"}
+        if not settings.enable_arusia_workflows:
+            return {"status": "FEATURE_DISABLED", "reason": "operator_arusia_opt_in_required"}
+        if arusia_engine is None:
+            return {"status": "NOT_CONFIGURED", "reason": "postgresql_or_local_vault_required"}
+        denied = await async_tool_quota(user, "mcp:arusia-create-episode", limit=5)
+        if denied is not None:
+            return denied
+        try:
+            return await run_in_threadpool(arusia_engine.create, user, manifest_json)
+        except WorkflowError as exc:
+            return {"status": "INVALID_OR_CONFLICTING_WORKFLOW", "reason": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "workflow_database_unavailable"}
+
+    @server.tool(name="arusia_get_episode")
+    async def arusia_get_episode(episode_id: str, offset: int = 0, limit: int = 50) -> dict:
+        """Owner-scoped status and shot-stage pagination. No worker credentials."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED"}
+        if not settings.enable_arusia_workflows:
+            return {"status": "FEATURE_DISABLED"}
+        if arusia_engine is None:
+            return {"status": "NOT_CONFIGURED"}
+        denied = await async_tool_quota(user, "mcp:arusia-read-episode", limit=60)
+        if denied is not None:
+            return denied
+        try:
+            return await run_in_threadpool(
+                arusia_engine.inspect, user, episode_id, offset=offset, limit=limit,
+            )
+        except WorkflowError as exc:
+            return {"status": "INVALID_OR_NOT_FOUND", "reason": str(exc)}
+        except (SQLAlchemyError, InvalidToken, OSError):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "workflow_database_unavailable"}
 
     @server.tool(name="drive_read_file")
     async def drive_read_file(file_id: str) -> dict:
