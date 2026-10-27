@@ -320,9 +320,87 @@ def verify_mcp(settings: dict, token: str) -> None:
             raise RuntimeError('mcp_tool_response_invalid')
 
 
+def sync_write_callback(root: Path, settings: dict,
+                        *, client: httpx.Client | None = None) -> str:
+    """Opt-in, non-destructive Keycloak redirect update for an existing realm.
+
+    Operates against the *local forwarded Keycloak port*, not a user-provided
+    remote admin endpoint. Preserves redirect URIs and does not modify secrets,
+    volume state, users, scopes or other clients. Never logs admin bearer token.
+    """
+    import contextlib
+
+    directory = root / STATE
+    connection_file = directory / 'connection.json'
+    if directory.is_symlink() or connection_file.is_symlink():
+        raise ValueError('codespaces_state_invalid')
+    connection = json.loads(connection_file.read_text())
+    username, password = connection.get('issuer_admin_username'), connection.get('issuer_admin_password')
+    if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
+        raise RuntimeError('codespaces_admin_credentials_missing')
+    hostname = urlsplit(origin(settings['issuer_origin'])).netloc
+    desired = origin(settings['mcp_origin']) + '/approve/write/callback'
+    previous_callback = origin(settings['mcp_origin']) + '/oauth/browser/callback'
+    port = int(settings['issuer_port'])
+    if not 1 <= port <= 65535:
+        raise ValueError('codespaces_issuer_port_invalid')
+    base = f'http://127.0.0.1:{port}'
+    header = {'Host': hostname, 'X-Forwarded-Proto': 'https'}
+
+    with contextlib.nullcontext(client) if client is not None else httpx.Client(
+        timeout=10, follow_redirects=False, trust_env=False
+    ) as active:
+        token_response = active.post(
+            base + '/realms/master/protocol/openid-connect/token',
+            headers=header,
+            data={'grant_type': 'password', 'client_id': 'admin-cli',
+                  'username': username, 'password': password},
+        )
+        if token_response.status_code != 200:
+            raise RuntimeError('keycloak_admin_authentication_failed')
+        token = token_response.json().get('access_token')
+        if not isinstance(token, str) or not 30 <= len(token) <= 8192:
+            raise RuntimeError('keycloak_admin_authentication_failed')
+        auth_headers = {**header, 'Authorization': 'Bearer ' + token}
+        listing = active.get(
+            base + '/admin/realms/im19/clients', headers=auth_headers,
+            params={'clientId': 'im19-browser'},
+        )
+        if listing.status_code != 200:
+            raise RuntimeError('keycloak_browser_client_lookup_failed')
+        clients = listing.json()
+        if (not isinstance(clients, list) or len(clients) != 1 or
+                clients[0].get('clientId') != 'im19-browser'):
+            raise RuntimeError('keycloak_browser_client_lookup_failed')
+        identifier = clients[0].get('id')
+        if not isinstance(identifier, str) or not identifier:
+            raise RuntimeError('keycloak_browser_client_lookup_failed')
+        client_url = base + '/admin/realms/im19/clients/' + identifier
+        record = active.get(client_url, headers=auth_headers)
+        if record.status_code != 200:
+            raise RuntimeError('keycloak_browser_client_lookup_failed')
+        config = record.json()
+        redirects = config.get('redirectUris')
+        if (not isinstance(redirects, list) or
+                any(not isinstance(v, str) for v in redirects) or
+                previous_callback not in redirects or
+                config.get('clientId') != 'im19-browser' or
+                config.get('standardFlowEnabled') is not True):
+            raise RuntimeError('keycloak_browser_client_unexpected_configuration')
+        if desired not in redirects:
+            updated = {**config, 'redirectUris': [*redirects, desired]}
+            changed = active.put(client_url, headers=auth_headers, json=updated)
+            if changed.status_code not in {200, 204}:
+                raise RuntimeError('keycloak_browser_redirect_update_failed')
+        check = active.get(client_url, headers=auth_headers)
+        if check.status_code != 200 or desired not in check.json().get('redirectUris', []):
+            raise RuntimeError('keycloak_browser_redirect_not_verified')
+        return 'ALREADY_CONFIGURED' if desired in redirects else 'REDIRECT_VERIFIED'
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='Isolated IM19 Codespaces OAuth demo; not production hosting')
-    parser.add_argument('action', choices=['configure', 'up', 'verify-public', 'verify-mcp', 'down'])
+    parser.add_argument('action', choices=['configure', 'up', 'verify-public', 'verify-mcp', 'sync-write-callback', 'down'])
     parser.add_argument('--mcp-origin')
     parser.add_argument('--issuer-origin')
     parser.add_argument('--chatgpt-callback', default=CALLBACK)
@@ -364,6 +442,11 @@ def main(argv=None) -> int:
             print('Testing real OAuth login and PKCE...', flush=True)
             probe = runpy.run_path(str(root / 'scripts/codespaces/probe_keycloak.py'))['probe']
             probe(root)
+        elif args.action == 'sync-write-callback':
+            phase = 'keycloak_browser_redirect'
+            status = sync_write_callback(root, settings)
+            print(json.dumps({'write_approval_callback': status,
+                              'google_write_verified': False}))
         elif args.action == 'down':
             compose(root, 'down')  # deliberately keep both volumes and all keys
         elif args.action in {'verify-public', 'verify-mcp'}:
@@ -388,7 +471,13 @@ def main(argv=None) -> int:
                           'mcp_test_token_required', 'mcp_initialize_failed', 'mcp_tools_list_failed',
                           'mcp_tools_call_failed', 'mcp_json_response_required', 'mcp_protocol_response_invalid',
                           'mcp_initialization_invalid', 'mcp_initialization_notification_failed',
-                          'mcp_tools_invalid', 'mcp_tool_response_invalid'})
+                          'mcp_tools_invalid', 'mcp_tool_response_invalid',
+                          'keycloak_admin_authentication_failed',
+                          'keycloak_browser_client_lookup_failed',
+                          'keycloak_browser_client_unexpected_configuration',
+                          'keycloak_browser_redirect_update_failed',
+                          'keycloak_browser_redirect_not_verified',
+                          'codespaces_admin_credentials_missing'})
         reason = str(exc) if str(exc) in controlled else type(exc).__name__
         print(json.dumps({'status': 'SETUP_FAILED', 'phase': phase, 'reason': reason, 'hint': 'Check Docker, origins, state consistency and local logs. No secret values printed.'}))
         return 1
