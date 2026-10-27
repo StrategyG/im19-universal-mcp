@@ -1,8 +1,9 @@
 # IM19 — Persistent Human Approval & Idempotency (Phase 6 foundation)
 
 **Status: backend security primitive implemented and mock/integration tested.**
-No user-facing account portal, trusted approval issuance endpoint, or provider
-write tool exists. **Do not treat this as production-ready approval UX.**
+No user-facing account portal or trusted approval issuance endpoint exists.
+An opt-in `drive_create_folder` tool is implemented as a restricted proof of
+integration, but it is disabled by default. **Do not treat this as production-ready approval UX.**
 
 ## Boundary and decision contract
 
@@ -13,7 +14,7 @@ External trusted human-authenticated portal (NOT IMPLEMENTED)
                             verified_approver, evidence_reference)
     -> Store random approval token hashed in PostgreSQL, 5-minute default expiry
 
-Provider-write orchestration (NOT EXPOSED IN MCP)
+Provider-write orchestration (exposed only for explicitly enabled Drive folder creation)
     -> payload_sha256(canonical JSON)
     -> reserve(token, same subject/provider/account/action/resource/payload,
                idempotency key)
@@ -22,8 +23,11 @@ Provider-write orchestration (NOT EXPOSED IN MCP)
     -> finalize known outcome SUCCEEDED or FAILED_RECONCILIATION_REQUIRED
 ```
 
-The current MCP tool registry remains **read-only**. AI-generated text, model
-confirmation or a guessed approval code cannot issue any approval.
+The default MCP configuration remains **read-only**. A restricted Drive root
+folder write tool is disabled by default and consumes externally issued grants.
+AI-generated text, model confirmation or a guessed approval code cannot issue
+any approval. The temporary approval-token tool interface is **not** a
+production-ready human approval UX.
 
 ### Properties enforced by the database
 
@@ -75,5 +79,5 @@ idempotency enforcement using real database transactions. This is not a
 production workload test and does not validate any external provider mutation.
 Live acceptance of browser-bound OAuth, operational key custody/rotation, ingress quotas,
 monitoring, disaster recovery, and live ChatGPT login remain unresolved.
-No external writes have been enabled.
+External writes are disabled by default. Live provider writes have not been tested.
 
