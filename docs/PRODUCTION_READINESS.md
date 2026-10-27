@@ -82,3 +82,14 @@ be labeled a verified live production deployment until those gates pass.
 Provider write adapters and a human write-approval UI remain out of scope for
 this read-only release. The internal approval/idempotency primitives do not
 advertise or authorize provider mutation tools.
+
+## Deployment diagnostic follow-up — 27 October 2026
+
+Public preflight now validates issuer PKCE metadata, exact resource/issuer
+mapping, database readiness and the unauthenticated POST challenge. The new
+`codespaces verify-mcp` command accepts a short-lived token from a protected
+environment variable and checks initialize, initialized notification, tools/list
+schemas and a read-only local status invocation against the actual public
+endpoint. It never reports ChatGPT connectivity or production acceptance.
+These checks close a diagnostic gap: HTTP readiness alone cannot establish MCP
+client compatibility. Actual production acceptance gates above still apply.
