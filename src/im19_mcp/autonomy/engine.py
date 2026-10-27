@@ -7,6 +7,7 @@ providers or shell commands from an AI plan.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -14,7 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, select, update
+from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from im19_mcp.arusia.workflow import ArusiaWorkflow, WorkflowError, parse_manifest, preview
@@ -25,7 +26,7 @@ GOAL = "prepare_arusia_episode"
 ALIASES = frozenset((GOAL, "siapkan episode arusia", "prepare arusia episode"))
 NAME = re.compile(r"[a-z][a-z0-9_]{1,39}")
 ID = re.compile(r"[0-9a-f]{32}")
-MAX_PLAN_BYTES = 170_000
+MAX_PLAN_BYTES = 350_000
 MAX_RESULT_BYTES = 32_000
 LEASE_SECONDS = 90
 MAX_ATTEMPTS = 3
@@ -283,7 +284,8 @@ class AutonomousEngine:
             )).scalar_one_or_none()
             if (step is None or step.status != "LEASED" or
                     step.lease_until <= now or
-                    step.lease_hash != hashlib.sha256(task["lease_token"].encode()).hexdigest()):
+                    not hmac.compare_digest(step.lease_hash,
+                                            hashlib.sha256(task["lease_token"].encode()).hexdigest())):
                 return {"status": "LEASE_EXPIRED_OR_INVALID"}
             step.lease_hash = ""
             step.lease_until = 0.0
