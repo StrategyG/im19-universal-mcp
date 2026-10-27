@@ -35,8 +35,13 @@ STAGES = (
     ("FRAME_QC", "HUMAN", "QUALITY_GOVERNOR"),
     ("ANIMATION", "WORKER", "ANIMATION_ENGINE"),
     ("AUDIO", "WORKER", "AUDIO_ENGINE"),
-    ("RENDER", "WORKER", "RENDER_ENGINE"),
-    ("FINAL_QC", "HUMAN", "QUALITY_GOVERNOR"),
+    ("SHOT_QC", "HUMAN", "QUALITY_GOVERNOR"),
+)
+# A full-episode deliverable cannot start before EVERY shot passes SHOT_QC.
+EPISODE_KEY = "EPISODE"
+EPISODE_STAGES = (
+    ("EPISODE_COMPOSITE", "WORKER", "RENDER_ENGINE"),
+    ("EPISODE_FINAL_QC", "HUMAN", "QUALITY_GOVERNOR"),
     ("DELIVERY_PACKAGE", "WORKER", "RENDER_ENGINE"),
 )
 STAGE_INDEX = {name: index for index, (name, _, _) in enumerate(STAGES)}
@@ -151,10 +156,10 @@ def preview(payload: str) -> dict[str, Any]:
         "status": "PLAN_VALID", "episode": manifest["episode"], "manifest_sha256": checksum,
         "shots": len(shots), "fps": 24, "total_frames": sum(x["duration_frames"] for x in shots),
         "expected_duration_seconds": round(sum(x["duration_frames"] for x in shots) / 24, 3),
-        "task_count": len(shots) * len(STAGES), "required_asset_ids": required,
+        "task_count": len(shots) * len(STAGES) + len(EPISODE_STAGES), "required_asset_ids": required,
         "asset_files_verified": False, "generated_frames": False, "episode_rendered": False,
         "stages": [{"name": stage, "kind": kind, "subsystem": subsystem}
-                   for stage, kind, subsystem in STAGES],
+                   for stage, kind, subsystem in (*STAGES, *EPISODE_STAGES)],
     }
 
 
@@ -187,8 +192,12 @@ class ArusiaWorkflow:
                     session.add(ArusiaTask(task_id=secrets.token_hex(16), episode_id=eid,
                                            shot_id=shot["shot_id"], stage=stage,
                                            position=position, kind=kind, status=status))
+            for position, (stage, kind, _) in enumerate(EPISODE_STAGES):
+                session.add(ArusiaTask(task_id=secrets.token_hex(16), episode_id=eid,
+                                       shot_id=EPISODE_KEY, stage=stage,
+                                       position=position, kind=kind, status="BLOCKED"))
         return {"status": "CREATED", "episode_id": eid, "episode": code,
-                "manifest_sha256": digest, "task_count": len(manifest["shots"]) * len(STAGES),
+                "manifest_sha256": digest, "task_count": len(manifest["shots"]) * len(STAGES) + len(EPISODE_STAGES),
                 "external_side_effects": False}
 
     def inspect(self, subject: str, episode_id: str, *, offset: int = 0,
@@ -219,10 +228,16 @@ class ArusiaWorkflow:
                            "human_evidence_recorded": bool(x.evidence_digest)}
                           for x in subset],
                 "episode_rendered": False, "asset_files_verified": False,
+                "episode_assembly_requires_all_shots": True,
                 "note": "Task DONE is a worker report, not an independently verified media artifact.",
             }
 
     def _next(self, session: Any, task: ArusiaTask) -> None:
+        """Release the successor only after direct dependencies have completed.
+
+        Unlike per-shot stages, the episode composite is a fan-in barrier:
+        every shot must pass SHOT_QC before it can be claimed.
+        """
         successor = session.execute(select(ArusiaTask).where(
             ArusiaTask.episode_id == task.episode_id,
             ArusiaTask.shot_id == task.shot_id,
@@ -230,6 +245,19 @@ class ArusiaWorkflow:
         )).scalar_one_or_none()
         if successor is not None and successor.status == "BLOCKED":
             successor.status = "WAITING_APPROVAL" if successor.kind == "HUMAN" else "READY"
+        if task.shot_id != EPISODE_KEY and task.stage == "SHOT_QC":
+            terminal = session.execute(select(ArusiaTask).where(
+                ArusiaTask.episode_id == task.episode_id,
+                ArusiaTask.stage == "SHOT_QC",
+            )).scalars().all()
+            if terminal and all(row.status == "APPROVED" for row in terminal):
+                assembly = session.execute(select(ArusiaTask).where(
+                    ArusiaTask.episode_id == task.episode_id,
+                    ArusiaTask.shot_id == EPISODE_KEY,
+                    ArusiaTask.stage == "EPISODE_COMPOSITE",
+                )).scalar_one_or_none()
+                if assembly is not None and assembly.status == "BLOCKED":
+                    assembly.status = "READY"
 
     def claim(self, subject: str, task_id: str, *, worker_id: str) -> dict[str, Any]:
         """Trusted worker CLI only. Concurrent claims use conditional SQL UPDATE."""
