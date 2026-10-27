@@ -63,7 +63,12 @@ Approval issue arguments:
 7. The AI calls `drive_create_folder` again with the identical name and the
    returned `approval_request_id`; the server atomically claims approval,
    reserves the idempotency key, executes the write once and verifies Google.
-8. Denied/expired/consumed or mismatched approvals fail closed.
+8. The AI can call `drive_get_write_approval_status(approval_request_id="...")`
+   to check whether human approval is still pending, approved, denied or used
+   without executing the write. `APPROVED` does not mean a folder was created.
+9. Denied/expired/consumed or mismatched approvals fail closed.
+10. The operator-only `im19-purge-expired` removes expired approval request
+    records and encrypted temporary browser state.
 
 The approval is bound to verified subject, Google account, exact payload,
 OAuth browser identity, CSRF nonce and a short expiry. Opening the review
