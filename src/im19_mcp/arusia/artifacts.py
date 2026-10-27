@@ -12,7 +12,7 @@ import os
 import secrets
 from pathlib import Path
 
-from sqlalchemy import BigInteger, Float, ForeignKey, String, UniqueConstraint, select
+from sqlalchemy import BigInteger, Float, String, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from im19_mcp.storage import Base, Vault
