@@ -3,7 +3,8 @@
 This is **one concrete write operation** added to the existing read-only
 gateway: `drive_create_folder` creates an empty folder in the root of the
 connected Google Drive account. Other provider write tools, deletion, upload,
-publication, and a trusted human approval portal remain **unimplemented**.
+publication remain **unimplemented**. An initial OAuth-authenticated review page
+is implemented for this one operation, but has not passed live production acceptance.
 
 ## Controls
 
@@ -17,16 +18,17 @@ The tool requires:
 2. A Google Drive connection with explicitly consented
    `https://www.googleapis.com/auth/drive.file` scope. The normal metadata
    grant **does not** authorize creation.
-3. A one-time approval issued outside MCP by trusted, independently
-   authenticated backend/human review using `ApprovalLedger.issue()`, bound to
-   the exact user, account, action, resource and payload.
+3. A one-time approval issued by the trusted IM19 backend **after the user
+   logs in through the IM19 identity provider and presses Setujui** on a secure
+   review page. The model cannot issue an approval itself.
 4. A unique idempotency key (8-128 permitted characters).
 5. A successful provider POST followed by GET metadata verification.
 
-**No MCP tool can issue an approval.** The existing ledger deliberately has no
-user-facing portal or trusted issuance endpoint. Do not enable real write
-operations until those workflows have been reviewed and deployed. For testing,
-unit tests call `ApprovalLedger.issue` directly with an operator fixture.
+**No MCP tool can issue an approval.** The gateway now exposes a restricted
+browser review flow. The backend holds the ledger token; it is never returned
+to an AI client in the normal remote workflow. Keep writes disabled until the
+new interface is independently security-tested and Google live acceptance passes.
+The local-stdio test fixture retains the legacy token-only path.
 
 ## Exact approval binding
 
@@ -42,10 +44,30 @@ Approval issue arguments:
 - `evidence_reference`: authenticated review/audit record.
 - `ttl_seconds`: 30-600.
 
-The current prototype supplies this short-lived one-time approval token in the
-MCP tool call. **This is not the desired production human-approval UX**: the
-model and client can see the token. Replace with backend-held approval
-correlation and a trusted account dashboard before accepting real user writes.
+## Browser approval sequence
+
+1. Set `IM19_ENABLE_APPROVED_DRIVE_WRITES=true` in a **reviewed staging**
+   configuration only, migrate database to `0006_write_approvals`, and
+   register `https://MCP_HOST/approve/write/callback` as an exact redirect
+   URI for the first-party `im19-browser` OAuth client.
+2. The model calls `drive_create_folder(name="...")` without an approval token.
+3. IM19 checks the verified MCP subject and stored `drive.file` scope; if
+   missing, call `request_service_authorization(service="drive", include_write=true)`.
+4. IM19 returns `APPROVAL_REQUIRED` with `approval_url` and
+   `approval_request_id`. The link itself **cannot** approve anything.
+5. The user opens the approval URL in Chrome/Android or another browser,
+   completes IM19 OAuth login, reviews the exact folder name and location,
+   and presses **Setujui** or **Tolak**.
+6. The approval token is created by trusted server code and encrypted in
+   PostgreSQL; it is never supplied to the model.
+7. The AI calls `drive_create_folder` again with the identical name and the
+   returned `approval_request_id`; the server atomically claims approval,
+   reserves the idempotency key, executes the write once and verifies Google.
+8. Denied/expired/consumed or mismatched approvals fail closed.
+
+The approval is bound to verified subject, Google account, exact payload,
+OAuth browser identity, CSRF nonce and a short expiry. Opening the review
+URL does **not** itself grant write permission.
 
 This tool never creates or updates a Google OAuth credential; the user must
 explicitly request new Drive consent using
@@ -72,8 +94,11 @@ and mutation receipt workflow. If finalization fails, response is
 ## Acceptance boundaries
 
 - Mocked API/OAuth and database tests demonstrate code behavior only.
-- Live Google Drive write, approval user interface, ChatGPT integration,
+- Live Google Drive write, production portal security acceptance, ChatGPT integration,
   provider scope verification, and production deployment are **NOT_VERIFIED**.
 - This change does not remove earlier read-only tools.
 - Browser Worker PR #14 is separate and does not provide write access.
-- Do not expose approval tokens in public logs, chat messages or ticket systems.
+- Keep the backend-held approval token out of MCP/AI output, browser HTML,
+  public logs, chat messages, and ticket systems.
+- Existing Codespaces identities need a controlled update to add the new exact
+  browser OAuth callback; running an old realm will reject the new callback.
