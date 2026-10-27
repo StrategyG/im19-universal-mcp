@@ -100,7 +100,7 @@ def test_manual_gate_prevents_automatic_generation_and_reuse(workflow):
     with pytest.raises(WorkflowError, match="task_not_claimable"):
         workflow.claim("alice", first["task_id"], worker_id="worker-002")
     with pytest.raises(WorkflowError, match="lease_invalid_or_expired"):
-        workflow.complete("alice", first["task_id"], "wrong", FAKE_SHA, provenance={})
+        workflow.complete("alice", first["task_id"], "x" * 43, FAKE_SHA, provenance={})
     done = workflow.complete("alice", first["task_id"], info["lease_token"],
                              FAKE_SHA, provenance={"worker_version": "mock-v1"})
     assert done["status"] == "WORKER_REPORTED_DONE"
@@ -164,20 +164,24 @@ async def test_mcp_plan_and_episode_create_require_subject_and_feature_flag(work
     server = MCPServer("ARUSIA v9 staging")
     register_tools(server, settings=settings, vault=workflow.vault, oauth=None,
                    allow_stdio_dev=True)
+    def body(result):
+        return (result.structured_content if result.structured_content is not None
+                else json.loads(result.content[0].text))
+
     async with Client(server) as client:
         names = {x.name for x in (await client.list_tools()).tools}
         assert {"arusia_plan_episode", "arusia_create_episode", "arusia_get_episode"} <= names
         plan = await client.call_tool("arusia_plan_episode", {"manifest_json": sample()})
-        assert plan.structured_content["status"] == "PLAN_VALID"
+        assert body(plan)["status"] == "PLAN_VALID"
         create = await client.call_tool("arusia_create_episode", {"manifest_json": sample()})
-        data = create.structured_content
+        data = body(create)
         assert data["status"] == "CREATED"
         read = await client.call_tool("arusia_get_episode", {"episode_id": data["episode_id"]})
-        assert read.structured_content["total_tasks"] == 12
-        assert not read.structured_content["episode_rendered"]
+        assert body(read)["total_tasks"] == 12
+        assert not body(read)["episode_rendered"]
     server = MCPServer("ARUSIA disabled")
     register_tools(server, settings=replace(settings, enable_arusia_workflows=False),
                    vault=workflow.vault, oauth=None, allow_stdio_dev=True)
     async with Client(server) as client:
         status = await client.call_tool("arusia_create_episode", {"manifest_json": sample(code="S01E02")})
-        assert status.structured_content["status"] == "FEATURE_DISABLED"
+        assert body(status)["status"] == "FEATURE_DISABLED"
