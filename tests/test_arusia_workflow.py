@@ -10,7 +10,7 @@ from mcp.server import MCPServer
 from sqlalchemy import select, update
 
 from im19_mcp.arusia.workflow import (
-    ArusiaTask, ArusiaWorkflow, WorkflowError, STAGES, parse_manifest, preview,
+    ArusiaTask, ArusiaWorkflow, WorkflowError, STAGES, EPISODE_STAGES, parse_manifest, preview,
 )
 from im19_mcp.config import Settings
 from im19_mcp.server import register_tools
@@ -46,7 +46,7 @@ def test_manifest_preflight_is_bounded_and_24fps():
     plan = preview(sample())
     assert plan["total_frames"] == 120
     assert plan["expected_duration_seconds"] == 5
-    assert plan["task_count"] == len(STAGES)
+    assert plan["task_count"] == len(STAGES) + len(EPISODE_STAGES)
     assert plan["required_asset_ids"] == [
         "BINTANG_PROP", "HALAMAN_KIO", "HALAMAN_KIO_BG", "KIO_MASTER",
     ]
@@ -77,7 +77,7 @@ def test_same_episode_is_idempotent_and_cross_owner_hidden(workflow):
     assert one["status"] == "CREATED"
     assert again["status"] == "EXISTING"
     assert again["episode_id"] == one["episode_id"]
-    assert one["task_count"] == 12
+    assert one["task_count"] == len(STAGES) + len(EPISODE_STAGES)
     with pytest.raises(WorkflowError, match="different_manifest"):
         workflow.create("alice", sample(duration=121))
     with pytest.raises(WorkflowError, match="episode_not_found"):
@@ -177,7 +177,7 @@ async def test_mcp_plan_and_episode_create_require_subject_and_feature_flag(work
         data = body(create)
         assert data["status"] == "CREATED"
         read = await client.call_tool("arusia_get_episode", {"episode_id": data["episode_id"]})
-        assert body(read)["total_tasks"] == 12
+        assert body(read)["total_tasks"] == len(STAGES) + len(EPISODE_STAGES)
         assert not body(read)["episode_rendered"]
     server = MCPServer("ARUSIA disabled")
     register_tools(server, settings=replace(settings, enable_arusia_workflows=False),
@@ -185,3 +185,40 @@ async def test_mcp_plan_and_episode_create_require_subject_and_feature_flag(work
     async with Client(server) as client:
         status = await client.call_tool("arusia_create_episode", {"manifest_json": sample(code="S01E02")})
         assert body(status)["status"] == "FEATURE_DISABLED"
+
+
+def test_full_episode_barrier_waits_for_all_shot_quality_gates(workflow):
+    original = json.loads(sample())
+    second = dict(original["shots"][0])
+    second["shot_id"] = "SH002"
+    original["shots"].append(second)
+    episode_id = workflow.create("alice", json.dumps(original))["episode_id"]
+    assert workflow.inspect("alice", episode_id)["total_tasks"] == 2 * len(STAGES) + len(EPISODE_STAGES)
+    composite = find_task(workflow, "alice", episode_id, "EPISODE_COMPOSITE")
+    assert composite["status"] == "BLOCKED"
+    with pytest.raises(WorkflowError, match="task_not_claimable"):
+        workflow.claim("alice", composite["task_id"], worker_id="rig-worker-1")
+
+    with workflow.vault.sessions.begin() as session:
+        for shot in ("SH001", "SH002"):
+            session.execute(update(ArusiaTask).where(
+                ArusiaTask.episode_id == episode_id,
+                ArusiaTask.shot_id == shot,
+                ArusiaTask.stage == "SHOT_QC",
+            ).values(status="WAITING_APPROVAL"))
+    qc_one = next(t for t in workflow.inspect("alice", episode_id, limit=100)["tasks"]
+                  if t["shot_id"] == "SH001" and t["stage"] == "SHOT_QC")
+    qc_two = next(t for t in workflow.inspect("alice", episode_id, limit=100)["tasks"]
+                  if t["shot_id"] == "SH002" and t["stage"] == "SHOT_QC")
+    assert workflow.approve("alice", qc_one["task_id"], evidence_sha256=FAKE_SHA)["status"] == "APPROVED"
+    assert find_task(workflow, "alice", episode_id, "EPISODE_COMPOSITE")["status"] == "BLOCKED"
+    assert workflow.approve("alice", qc_two["task_id"], evidence_sha256=FAKE_SHA)["status"] == "APPROVED"
+    assert find_task(workflow, "alice", episode_id, "EPISODE_COMPOSITE")["status"] == "READY"
+    lease = workflow.claim("alice", composite["task_id"], worker_id="rig-worker-1")
+    assert lease["status"] == "LEASED"
+    workflow.complete("alice", composite["task_id"], lease["lease_token"], FAKE_SHA,
+                      provenance={"renderer": "synthetic"})
+    assert find_task(workflow, "alice", episode_id, "EPISODE_FINAL_QC")["status"] == "WAITING_APPROVAL"
+    final = find_task(workflow, "alice", episode_id, "EPISODE_FINAL_QC")
+    workflow.approve("alice", final["task_id"], evidence_sha256=FAKE_SHA)
+    assert find_task(workflow, "alice", episode_id, "DELIVERY_PACKAGE")["status"] == "READY"
