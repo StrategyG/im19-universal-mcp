@@ -61,6 +61,7 @@ jobs:
         run: docker build --tag im19-mcp:ci .
       - name: Validate managed production Compose without real secrets
         env:
+          IM19_IMAGE_REF: ghcr.io/strategyg/im19-universal-mcp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           IM19_DATABASE_URL: postgresql+psycopg://test:synthetic@db.invalid:5432/im19
           IM19_FERNET_KEY: SYNTHETIC_CI_ONLY_NOT_VALID_FERNET_KEY
           IM19_AUDIT_SALT: SYNTHETIC_CI_AUDIT_SALT_NOT_FOR_PRODUCTION
@@ -69,6 +70,10 @@ jobs:
           IM19_MCP_INTROSPECTION: https://identity.invalid/introspect
           IM19_MCP_CLIENT_ID: synthetic-client
           IM19_MCP_CLIENT_SECRET: synthetic-not-a-secret
-        run: docker compose -f compose.production.managed.yaml config --quiet
+        run: |
+          docker compose -f compose.production.managed.yaml config --quiet
+          # Never allow an unpinned mutable tag or a local build in production.
+          docker compose -f compose.production.managed.yaml config --format json | python -c 'import json,sys; s=json.load(sys.stdin)["services"]["gateway"]; ref=s["image"]; assert "@sha256:" in ref and len(ref.split("@sha256:")[1])==64; assert "build" not in s'
+
 
 
