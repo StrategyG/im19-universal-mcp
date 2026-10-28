@@ -50,12 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Settings.from_env()
     if not cfg.enable_browser_jobs or not cfg.browser_inspection_origins:
         parser.error("browser_queue_not_configured")
-    if not cfg.vault_key:
-        parser.error("database_worker_configuration_missing")
-    # Vault key is currently required by the existing Vault constructor, but
-    # this process does not decrypt provider tokens. Production DB role MUST
-    # deny SELECT on credential and OAuth tables; no provider keys are mounted.
-    store = Vault(cfg.database_url, encryption_key=cfg.vault_key, audit_salt=cfg.audit_salt)
+    # Generate an ephemeral, unrelated encryption key only to satisfy Vault's
+    # database-session constructor. Never mount the gateway's real Fernet key,
+    # OAuth/provider secrets, account cookies or service credentials.
+    from cryptography.fernet import Fernet
+    store = Vault(cfg.database_url, encryption_key=Fernet.generate_key().decode(),
+                  audit_salt="")
     queue = BrowserJobQueue(store)
     try:
         while True:
