@@ -1,0 +1,48 @@
+# Production gateway with an EXTERNAL, managed PostgreSQL database.
+# Do not run compose.yaml's bundled development postgres for public production.
+# TLS/WAF proxy must forward to 127.0.0.1:8000 on this host.
+services:
+  gateway:
+    build: .
+    image: im19-gateway:${IM19_IMAGE_TAG:-staging}
+    restart: unless-stopped
+    environment:
+      IM19_DEPLOYMENT_ENV: production
+      IM19_BIND_HOST: 0.0.0.0
+      IM19_DEV_SUBJECT: ""
+      IM19_FERNET_PREVIOUS_KEYS: ""
+      IM19_ENABLE_APPROVED_DRIVE_WRITES: "false"
+      IM19_DATABASE_URL: "${IM19_DATABASE_URL:?managed PostgreSQL connection URL required}"
+      IM19_FERNET_KEY: "${IM19_FERNET_KEY:?Fernet key required}"
+      IM19_AUDIT_SALT: "${IM19_AUDIT_SALT:?strong unique audit salt required}"
+      IM19_MCP_ISSUER: "${IM19_MCP_ISSUER:?issuer URL required}"
+      IM19_MCP_RESOURCE: "${IM19_MCP_RESOURCE:?MCP resource URL required}"
+      IM19_MCP_INTROSPECTION: "${IM19_MCP_INTROSPECTION:?introspection URL required}"
+      IM19_MCP_CLIENT_ID: "${IM19_MCP_CLIENT_ID:?introspection client required}"
+      IM19_MCP_CLIENT_SECRET: "${IM19_MCP_CLIENT_SECRET:?introspection client secret required}"
+      IM19_BROWSER_AUTHORIZATION: "${IM19_BROWSER_AUTHORIZATION:-}"
+      IM19_BROWSER_TOKEN: "${IM19_BROWSER_TOKEN:-}"
+      IM19_BROWSER_CLIENT_ID: "${IM19_BROWSER_CLIENT_ID:-}"
+      IM19_BROWSER_CLIENT_SECRET: "${IM19_BROWSER_CLIENT_SECRET:-}"
+      IM19_GOOGLE_CLIENT_ID: "${IM19_GOOGLE_CLIENT_ID:-}"
+      IM19_GOOGLE_CLIENT_SECRET: "${IM19_GOOGLE_CLIENT_SECRET:-}"
+      IM19_GOOGLE_REDIRECT_URI: "${IM19_GOOGLE_REDIRECT_URI:-}"
+    ports:
+      - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 2.0
+    init: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
