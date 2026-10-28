@@ -71,7 +71,10 @@ def _url(url: str, origins: tuple[str, ...] | list[str]) -> str:
     """
     if not isinstance(url, str) or len(url) > 1500:
         raise BrowserJobError("browser_url_invalid")
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        raise BrowserJobError("browser_url_invalid") from None
     if parsed.query or parsed.fragment or ";" in parsed.path:
         raise BrowserJobError("browser_url_query_forbidden")
     try:
@@ -127,6 +130,7 @@ class BrowserJobQueue:
             if row is None:
                 raise BrowserJobError("browser_job_not_found")
             response = {"status": row.state, "job_id": row.job_id,
+                        "untrusted_page_metadata": True,
                         "attempts": row.attempts,
                         "origin": row.allowed_origin,
                         "browser_executed": row.state == "COMPLETED",
@@ -224,7 +228,12 @@ class BrowserJobQueue:
                     or not isinstance(result.get("blocked_requests"), int)
                     or not 0 <= result["blocked_requests"] <= 100000):
                 raise BrowserJobError("browser_worker_result_invalid")
-            row.page_title = result["title"][:200]
+            # Page titles are adversarial input; remove terminal/control
+            # characters and never interpret them as instructions or markup.
+            row.page_title = "".join(
+                char for char in result["title"]
+                if char.isprintable() and char not in {"\u2028", "\u2029"}
+            )[:200]
             row.blocked_requests = result["blocked_requests"]
             row.state = "COMPLETED"
             return {"status": "COMPLETED"}
