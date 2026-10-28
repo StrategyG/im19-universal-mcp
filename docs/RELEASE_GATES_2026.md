@@ -52,15 +52,27 @@ explicitly assessed. Configure a secrets manager and protected CI/CD secret
 injection; environment variables below are *placeholders*.
 
 ```bash
-# Only after backup + migration rehearsal; run with migration credentials.
-docker compose -f compose.production.managed.yaml build
+# Build and scan image in a controlled CI pipeline, publish to a
+# trusted registry, then inject the approved digest-pinned reference.
+export IM19_IMAGE_REF='ghcr.io/OWNER/REPOSITORY@sha256:<APPROVED_DIGEST>'
+
+# A deployment uses ONLY that immutable image and a managed DB.
+docker compose -f compose.production.managed.yaml config --quiet
+docker compose -f compose.production.managed.yaml pull gateway
+
+# Only after backup + migration rehearsal; use separate migration DB credentials.
 docker compose -f compose.production.managed.yaml run --rm gateway alembic upgrade head
 
-# Restore the runtime credentials before starting traffic.
+# Restore least-privilege runtime DB credentials before serving traffic.
 docker compose -f compose.production.managed.yaml run --rm gateway \
     im19-mcp-doctor --mode remote --check-database
-docker compose -f compose.production.managed.yaml up -d gateway
+docker compose -f compose.production.managed.yaml up -d --no-build gateway
 ```
+
+The image must come from a reviewed release commit, be scanned for
+vulnerabilities, and use its exact OCI digest, not a mutable tag. The
+`compose.production.managed.yaml` file no longer includes `build:`; it
+cannot silently rebuild unreviewed code on a production host.
 
 The management command and Docker Compose obtain secrets from the protected
 host environment, not from repository files. Avoid `docker compose config`
