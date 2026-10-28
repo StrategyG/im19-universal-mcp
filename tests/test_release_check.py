@@ -2,7 +2,7 @@
 import httpx
 import pytest
 
-from im19_mcp.release_check import check_public, run_smoke
+from im19_mcp.release_check import run_smoke
 
 RESOURCE = "https://mcp.test/mcp"
 ISSUER = "https://identity.test/realms/im19"
