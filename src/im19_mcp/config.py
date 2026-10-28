@@ -47,6 +47,8 @@ class Settings:
     browser_client_id: str = ""
     browser_client_secret: str = field(default="", repr=False)
     enable_approved_drive_writes: bool = False
+    enable_browser_jobs: bool = False
+    browser_inspection_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -76,6 +78,9 @@ class Settings:
             browser_client_id=os.getenv("IM19_BROWSER_CLIENT_ID", ""),
             browser_client_secret=os.getenv("IM19_BROWSER_CLIENT_SECRET", ""),
             enable_approved_drive_writes=os.getenv("IM19_ENABLE_APPROVED_DRIVE_WRITES", "false").lower() == "true",
+            enable_browser_jobs=os.getenv("IM19_ENABLE_BROWSER_JOBS", "false").lower() == "true",
+            browser_inspection_origins=tuple(x.strip() for x in os.getenv(
+                "IM19_BROWSER_INSPECTION_ORIGINS", "").split(",") if x.strip()),
         )
 
     def browser_enabled(self) -> bool:
@@ -118,6 +123,11 @@ class Settings:
             raise ValueError("duplicate_encryption_keys_forbidden")
         if self.enable_approved_drive_writes and not (self.google_enabled() and self.browser_enabled()):
             raise ValueError("approved_drive_writes_require_google_and_browser_oauth")
+        if self.enable_browser_jobs:
+            from im19_mcp.browser_policy import BrowserPolicy
+            if not self.browser_inspection_origins:
+                raise ValueError("browser_inspection_origin_allowlist_required")
+            BrowserPolicy.from_origins(list(self.browser_inspection_origins))
         if self.deployment_environment == "production":
             # This implementation requires an OFFLINE full rewrap. Production
             # gateways run primary-only after the migration and validation.
