@@ -38,6 +38,7 @@ im19-verify-primary-key = "im19_mcp.cli:verify_primary_key"
 im19-mcp-doctor = "im19_mcp.doctor:main"
 im19-production-smoke = "im19_mcp.release_check:main"
 im19-healthcheck = "im19_mcp.healthcheck:main"
+im19-browser-queue-worker = "im19_mcp.browser_queue_worker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
