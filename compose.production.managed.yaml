@@ -3,8 +3,9 @@
 # TLS/WAF proxy must forward to 127.0.0.1:8000 on this host.
 services:
   gateway:
-    build: .
-    image: im19-gateway:${IM19_IMAGE_TAG:-staging}
+    # Deploy an image that has already passed CI and is pinned to its digest.
+    # Refuse locally built mutable tags for production deployment.
+    image: "${IM19_IMAGE_REF:?approved immutable image reference required}"
     restart: unless-stopped
     environment:
       IM19_DEPLOYMENT_ENV: production
