@@ -9,6 +9,7 @@ from im19_mcp.storage import Base
 from im19_mcp.governance import approvals  # noqa: F401  register models for metadata
 from im19_mcp.governance import write_approval  # noqa: F401  register approval request schema
 from im19_mcp import distributed_quota  # noqa: F401  register rate windows
+from im19_mcp import browser_jobs  # noqa: F401  register read-only browser task table
 
 metadata = Base.metadata
 url = Settings.from_env().database_url

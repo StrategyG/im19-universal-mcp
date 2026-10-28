@@ -130,3 +130,11 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
+
+## Opt-in browser inspection queue (staging only)
+
+IM19 includes a **read-only**, owner-scoped browser inspection queue with
+MCP submit/status/cancel tools and a separate Playwright worker. It is
+disabled by default, does not provide Cloud Browser sessions or login,
+and requires a dedicated egress-isolated worker before deployment. See
+[Browser Queue v1](docs/BROWSER_QUEUE_V1.md).
