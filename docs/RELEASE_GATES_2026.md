@@ -110,3 +110,32 @@ Do not treat a `CODEOWNERS` file alone as branch protection.
 - The ARUSIA/autonomous PRs are not included in this branch and require
   their own worker/media acceptance.
 - Deployment is NO-GO until the above checks are completed on the real host.
+
+
+## Live endpoint smoke CLI (after deploying to staging)
+
+A dedicated `im19-production-smoke` command validates the HTTPS MCP
+resource, issuer discovery/PKCE, database readiness, rejection of anonymous
+MCP, Host/Origin controls and (when explicitly provided) authenticated
+initialize/tools/list/get_connection_status. It is **read-only** and prints
+only fixed boolean fields and a status. Its output always includes
+`production_acceptance=false`: operator sign-off remains mandatory.
+
+```bash
+# Discovery, database readiness and denial paths only. Exit 0 means PUBLIC
+# PREFLIGHT, not login success:
+im19-production-smoke --mcp-resource 'https://mcp.example.com/mcp' \
+  --issuer 'https://identity.example.com/realms/im19' --public-only
+
+# Authenticated smoke: acquire a short-lived TEST token from your own issuer,
+# inject securely into the process environment, and prevent shell history/logs.
+# The command never prints the token. Without one it exits nonzero.
+im19-production-smoke --mcp-resource 'https://mcp.example.com/mcp' \
+  --issuer 'https://identity.example.com/realms/im19'
+```
+
+The authenticated command reads `IM19_MCP_TEST_TOKEN` from its environment.
+Do not place a bearer token in command-line arguments, a GitHub Actions
+workflow input, issue comments or screenshots. The probe does not perform
+Google consent, Drive writes, backup restoration, penetration testing or
+ChatGPT plugin setup. Its results cannot replace those release gates.
