@@ -103,6 +103,7 @@ class Vault:
         from im19_mcp.governance import approvals  # noqa: F401
         from im19_mcp import distributed_quota  # noqa: F401
         from im19_mcp.governance import write_approval  # noqa: F401
+        from im19_mcp import browser_jobs  # noqa: F401
 
         Base.metadata.create_all(self.engine)
 
