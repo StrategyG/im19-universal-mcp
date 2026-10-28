@@ -88,6 +88,36 @@ class IntrospectionVerifier(TokenVerifier):
         )
 
 
+async def _bounded_approval_form(request: Request, *, limit: int = 2048) -> bytes:
+    """Bound form bytes even when clients omit or forge Content-Length.
+
+    Reject ambiguous/invalid lengths and stop reading after the first
+    oversized stream chunk. Never store an unbounded request body in memory.
+    """
+    lengths = [
+        value for key, value in request.scope.get("headers", [])
+        if key.lower() == b"content-length"
+    ]
+    if len(lengths) > 1:
+        raise ValueError("duplicate_content_length")
+    declared = None
+    if lengths:
+        raw = lengths[0]
+        if not raw or len(raw) > 8 or not raw.isdigit():
+            raise ValueError("invalid_content_length")
+        declared = int(raw)
+        if declared > limit:
+            raise ValueError("approval_form_too_large")
+    received = bytearray()
+    async for chunk in request.stream():
+        if len(received) + len(chunk) > limit:
+            raise ValueError("approval_form_too_large")
+        received.extend(chunk)
+    if declared is not None and len(received) != declared:
+        raise ValueError("content_length_mismatch")
+    return bytes(received)
+
+
 def create_gateway(
     settings: Settings | None = None, *, quota: DistributedQuota | None = None,
     vault: Vault | None = None,
@@ -206,12 +236,10 @@ def create_gateway(
         if (request.headers.get("origin") != write_portal.origin or
                 not request.headers.get("content-type", "").startswith(
                     "application/x-www-form-urlencoded"
-                ) or int(request.headers.get("content-length", "0") or 0) > 2048):
-            return JSONResponse({"status": "APPROVAL_DENIED"}, status_code=403)
-        data = await request.body()
-        if len(data) > 2048:
+                )):
             return JSONResponse({"status": "APPROVAL_DENIED"}, status_code=403)
         try:
+            data = await _bounded_approval_form(request)
             values = parse_qs(data.decode("ascii"), keep_blank_values=True, max_num_fields=5)
             if any(len(values.get(key, [])) != 1 for key in ("request", "csrf", "decision")):
                 raise ValueError("missing_or_duplicate_fields")
