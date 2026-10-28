@@ -2,7 +2,6 @@
 import json
 import time
 from dataclasses import replace
-from urllib.parse import urlsplit
 
 import pytest
 from cryptography.fernet import Fernet
