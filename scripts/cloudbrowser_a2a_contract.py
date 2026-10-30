@@ -69,6 +69,12 @@ async def verify():
             assert summary["data"]["requires_owner_input"] is True, summary
             tasks = await connector.list_tasks()
             assert tasks["data"]["tasks"][0]["id"] == job["id"], tasks
+            safe = await connector.list_task_summaries()
+            assert safe["data"]["tasks"][0]["requires_owner_input"] is True, safe
+            assert safe["data"]["tasks"][0]["artifact_count"] is None, safe
+            ready = await connector.readiness()
+            assert ready["data"]["ready"] is False, ready
+            assert ready["data"]["checks"]["worker"] is False, ready
 
             # A2A credentials are owner-wide; never silently accept an invalid key.
             wrong = CloudbrowserClient(settings.a2a_base_url, "invalid-key", transport=transport)
@@ -78,7 +84,7 @@ async def verify():
                 assert str(error) == "UPSTREAM_AUTH_DENIED", str(error)
             else:
                 raise AssertionError("A2A rejected-key test must fail closed")
-            print("PASS Cloudbrowser A2A 1.0: card pinning, GetTask, ListTasks, normalized status, deny bad bearer")
+            print("PASS Cloudbrowser A2A 1.0: status, redacted list, readiness, pinned card, bad bearer denied")
         finally:
             await app.state.agent.close()
             app.state.store.close()
