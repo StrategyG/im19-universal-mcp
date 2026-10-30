@@ -129,11 +129,17 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
         assert {"cloudbrowser_get_agent_card", "cloudbrowser_get_task",
                 "cloudbrowser_list_tasks"}.issubset(names)
         ok = await client.call_tool("cloudbrowser_get_task", {"task_id": "job123"})
-        assert ok.structured_content["status"] == "OK"
-        assert ok.structured_content["data"]["id"] == "job123"
+        assert not ok.is_error, str(ok.content)
+        from json import loads
+        payload = ok.structured_content if ok.structured_content is not None else loads(ok.content[0].text)
+        assert payload["status"] == "OK"
+        assert payload["data"]["id"] == "job123"
         monkeypatch.setenv("IM19_DEV_SUBJECT", "other-subject")
         denied = await client.call_tool("cloudbrowser_list_tasks", {})
-        assert denied.structured_content["status"] == "DENY"
+        payload = denied.structured_content if denied.structured_content is not None else loads(denied.content[0].text)
+        assert payload["status"] == "DENY"
         monkeypatch.delenv("IM19_DEV_SUBJECT")
         no_identity = await client.call_tool("cloudbrowser_get_agent_card", {})
-        assert no_identity.structured_content["status"] == "AUTH_REQUIRED"
+        payload = (no_identity.structured_content if no_identity.structured_content is not None
+                   else loads(no_identity.content[0].text))
+        assert payload["status"] == "AUTH_REQUIRED"
