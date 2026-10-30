@@ -21,6 +21,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from starlette.concurrency import run_in_threadpool
 
 from im19_mcp.config import Settings
+from im19_mcp.cloudbrowser import CloudbrowserClient, CloudbrowserError
 from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
 from im19_mcp.drive import DriveClient, validate_folder_name
@@ -64,6 +65,7 @@ def register_tools(
     browser_auth=None,
     approval_ledger: ApprovalLedger | None = None,
     write_approval_portal: WriteApprovalPortal | None = None,
+    cloudbrowser_factory: Callable[[str, str], CloudbrowserClient] = CloudbrowserClient,
 ) -> None:
     """Register read tools plus opt-in approval-gated Drive creation."""
     ledger = approval_ledger if approval_ledger is not None else (
@@ -156,6 +158,13 @@ def register_tools(
         user = subject()
         if not user:
             return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if service == "cloudbrowser":
+            if not settings.cloudbrowser_enabled():
+                return {"status": "NOT_CONFIGURED", "service": service}
+            if user not in settings.cloudbrowser_allowed_subjects:
+                return {"status": "DENY", "reason": "subject_not_allowlisted"}
+            return {"status": "CONFIGURED_NOT_LIVE_VERIFIED", "service": service,
+                    "provider_live_verified": False}
         if service not in {"youtube", "drive"}:
             return {"status": "NOT_IMPLEMENTED", "service": service}
         denied = tool_quota(user, "mcp:connection-status", limit=60)
@@ -459,6 +468,53 @@ def register_tools(
         return await execute(
             "drive_read_file", "drive", set(SCOPES["drive_content"]),
             lambda c: c.read_text(file_id), drive_factory,
+        )
+
+
+    async def cloudbrowser_read(action: str, operation: Callable[[CloudbrowserClient], Awaitable[dict]]) -> dict:
+        """Owner-only A2A read. IM19 OAuth subject is NEVER a caller argument."""
+        user = subject()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if not settings.cloudbrowser_enabled():
+            return {"status": "NOT_CONFIGURED", "service": "cloudbrowser"}
+        if user not in settings.cloudbrowser_allowed_subjects:
+            return {"status": "DENY", "reason": "subject_not_allowlisted"}
+        denied = await async_tool_quota(user, "mcp:cloudbrowser-reads", limit=20)
+        if denied is not None:
+            return denied
+        try:
+            client = cloudbrowser_factory(settings.cloudbrowser_url, settings.cloudbrowser_api_key)
+            result = await operation(client)
+            if not await audit(user, "cloudbrowser", action, "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+            return {"status": "OK", "service": "cloudbrowser", **result}
+        except ValueError:
+            await audit(user, "cloudbrowser", action, "DENY")
+            return {"status": "INVALID_ARGUMENT"}
+        except CloudbrowserError as exc:
+            await audit(user, "cloudbrowser", action, "ERROR")
+            return {"status": "ERROR", "error_code": str(exc)}
+        except Exception:
+            logger.warning("cloudbrowser_read_failed")
+            await audit(user, "cloudbrowser", action, "ERROR")
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "cloudbrowser_unavailable"}
+
+    @server.tool(name="cloudbrowser_get_agent_card")
+    async def cloudbrowser_get_agent_card() -> dict:
+        """Read sanitized A2A orchestrator discovery; does not establish live readiness."""
+        return await cloudbrowser_read("cloudbrowser_get_agent_card", lambda c: c.agent_card())
+
+    @server.tool(name="cloudbrowser_get_task")
+    async def cloudbrowser_get_task(task_id: str) -> dict:
+        """Read one Cloudbrowser orchestrator task by ID; cannot modify the task."""
+        return await cloudbrowser_read("cloudbrowser_get_task", lambda c: c.get_task(task_id))
+
+    @server.tool(name="cloudbrowser_list_tasks")
+    async def cloudbrowser_list_tasks(page_size: int = 10, page_token: str = "") -> dict:
+        """Read a bounded page of orchestrator A2A tasks; no artifact downloads."""
+        return await cloudbrowser_read(
+            "cloudbrowser_list_tasks", lambda c: c.list_tasks(page_size, page_token)
         )
 
 
