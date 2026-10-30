@@ -53,6 +53,25 @@ jobs:
           cd /tmp
           /tmp/im19-wheel/bin/im19-mcp-doctor --mode local
           /tmp/im19-wheel/bin/python -c 'from im19_mcp.browser_auth import BrowserAuthorization'
+  cloudbrowser-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out pinned Cloudbrowser contract target
+        uses: actions/checkout@v4
+        with:
+          repository: StrategyG/Cloudbrowser
+          ref: 4d65dcd07e984591b16238fb168675d22e9326a3
+          path: cloudbrowser_upstream
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install two project packages (CI-only)
+        run: |
+          python -m pip install -e . -e ./cloudbrowser_upstream
+      - name: Exercise actual Cloudbrowser A2A ASGI protocol
+        run: python scripts/cloudbrowser_a2a_contract.py
   image:
     runs-on: ubuntu-latest
     steps:
