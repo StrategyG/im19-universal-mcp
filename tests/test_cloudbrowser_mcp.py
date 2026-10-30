@@ -284,6 +284,8 @@ async def test_cloudbrowser_mcp_refuses_unlogged_read(monkeypatch):
     counter = {"requests": 0}
 
     class FailingVault:
+        audit_salt = ""
+
         def audit(self, *args, **kwargs):
             raise OSError("audit backend unavailable")
 
