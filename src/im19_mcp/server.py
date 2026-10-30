@@ -520,6 +520,7 @@ def register_tools(
 
 def create_stdio_server(settings: Settings | None = None) -> MCPServer:
     cfg = settings or Settings.from_env()
+    cfg.validate_cloudbrowser()
     vault = Vault(
         cfg.database_url, encryption_key=cfg.vault_key,
         audit_salt=cfg.audit_salt, previous_keys=cfg.vault_previous_keys,
