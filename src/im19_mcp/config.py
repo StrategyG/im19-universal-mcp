@@ -47,6 +47,10 @@ class Settings:
     browser_client_id: str = ""
     browser_client_secret: str = field(default="", repr=False)
     enable_approved_drive_writes: bool = False
+    cloudbrowser_url: str = ""
+    cloudbrowser_api_key: str = field(default="", repr=False)
+    cloudbrowser_allowed_subjects: tuple[str, ...] = ()
+    cloudbrowser_allow_raw_tasks: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -76,11 +80,42 @@ class Settings:
             browser_client_id=os.getenv("IM19_BROWSER_CLIENT_ID", ""),
             browser_client_secret=os.getenv("IM19_BROWSER_CLIENT_SECRET", ""),
             enable_approved_drive_writes=os.getenv("IM19_ENABLE_APPROVED_DRIVE_WRITES", "false").lower() == "true",
+            cloudbrowser_url=os.getenv("IM19_CLOUDBROWSER_URL", "").strip(),
+            cloudbrowser_api_key=os.getenv("IM19_CLOUDBROWSER_API_KEY", ""),
+            cloudbrowser_allowed_subjects=tuple(
+                part.strip() for part in os.getenv("IM19_CLOUDBROWSER_ALLOWED_SUBJECTS", "").split(",")
+                if part.strip()
+            ),
+            cloudbrowser_allow_raw_tasks=os.getenv(
+                "IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", "false"
+            ).strip().lower() == "true",
         )
 
     def browser_enabled(self) -> bool:
         return all((self.browser_authorization, self.browser_token,
                     self.browser_client_id, self.browser_client_secret))
+
+    def cloudbrowser_enabled(self) -> bool:
+        return bool(self.cloudbrowser_url and self.cloudbrowser_api_key and
+                    self.cloudbrowser_allowed_subjects)
+
+    def validate_cloudbrowser(self) -> None:
+        fields = (self.cloudbrowser_url, self.cloudbrowser_api_key,
+                  self.cloudbrowser_allowed_subjects)
+        if not any(fields):
+            return
+        if not all(fields):
+            raise ValueError("cloudbrowser_configuration_incomplete")
+        _https_url(self.cloudbrowser_url, "IM19_CLOUDBROWSER_URL", allow_loopback=True)
+        if urlsplit(self.cloudbrowser_url).path not in ("", "/"):
+            raise ValueError("cloudbrowser_url_must_be_origin_only")
+        if len(self.cloudbrowser_api_key) < 32 or len(self.cloudbrowser_api_key) > 8192:
+            raise ValueError("cloudbrowser_api_key_invalid")
+        if (len(self.cloudbrowser_allowed_subjects) > 10 or
+                len(set(self.cloudbrowser_allowed_subjects)) != len(self.cloudbrowser_allowed_subjects) or
+                any(not value or len(value) > 255 or any(ch.isspace() for ch in value)
+                    for value in self.cloudbrowser_allowed_subjects)):
+            raise ValueError("cloudbrowser_subject_allowlist_invalid")
 
     def google_enabled(self) -> bool:
         values = (self.google_client_id, self.google_client_secret, self.google_redirect_uri, self.vault_key)
@@ -90,6 +125,7 @@ class Settings:
         return True
 
     def require_remote(self) -> None:
+        self.validate_cloudbrowser()
         fields = (self.mcp_issuer, self.mcp_resource, self.mcp_introspection,
                   self.mcp_client_id, self.mcp_client_secret, self.audit_salt,
                   self.vault_key)
