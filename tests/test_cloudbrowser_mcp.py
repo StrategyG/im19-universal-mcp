@@ -118,6 +118,12 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
             return {"data": {"id": task_id, "state": "TASK_STATE_WORKING"},
                     "untrusted": True}
 
+        async def list_task_summaries(self, page_size, page_token):
+            return {"data": {"tasks": []}, "untrusted": True}
+
+        async def readiness(self):
+            return {"data": {"ready": False}, "untrusted": True}
+
         async def list_tasks(self, page_size, page_token):
             return {"data": {"tasks": []}, "untrusted": True}
 
@@ -131,7 +137,8 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
     async with Client(server) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
         assert {"cloudbrowser_get_agent_card", "cloudbrowser_get_task",
-                "cloudbrowser_get_task_summary", "cloudbrowser_list_tasks"}.issubset(names)
+                "cloudbrowser_get_task_summary", "cloudbrowser_list_tasks",
+                "cloudbrowser_list_task_summaries", "cloudbrowser_get_readiness"}.issubset(names)
         ok = await client.call_tool("cloudbrowser_get_task", {"task_id": "job123"})
         assert not ok.is_error, str(ok.content)
         from json import loads
@@ -199,3 +206,107 @@ async def test_agent_card_must_pin_declared_rpc_origin():
         )
         with pytest.raises(CloudbrowserError, match="UPSTREAM_A2A_CONTRACT_MISMATCH"):
             await client.agent_card()
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_unhealthy_cloudbrowser_without_success_claim():
+    client = CloudbrowserClient("https://cloud.example", "key",
+        transport=httpx.MockTransport(lambda req: httpx.Response(
+            503, json={"ready": False, "checks": {"database": True, "worker": False,
+                                                "telegram": True},
+                       "upstream_secret": "NEVER_REFLECT"})))
+    result = await client.readiness()
+    assert result["data"]["ready"] is False
+    assert result["data"]["checks"]["worker"] is False
+    assert "upstream_secret" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_readiness_rejects_forged_or_malformed_boolean_fields():
+    for payload in ({"ready": True, "checks": {"database": True, "worker": False, "telegram": True}},
+                    {"ready": "true", "checks": {}},
+                    {"ready": False, "checks": {"database": True, "worker": None, "telegram": True}}):
+        client = CloudbrowserClient("https://cloud.example", "key",
+            transport=httpx.MockTransport(lambda req: httpx.Response(503, json=payload)))
+        with pytest.raises(CloudbrowserError, match="UPSTREAM_READINESS_INVALID"):
+            await client.readiness()
+
+
+@pytest.mark.asyncio
+async def test_list_summary_strips_messages_and_reports_omitted_artifacts_as_unknown():
+    import json
+
+    response = {"jsonrpc": "2.0", "id": "im19-read",
+                "result": {"tasks": [
+                    {"id": "job-1", "status": {"state": "TASK_STATE_COMPLETED",
+                                             "message": {"parts": [{"text": "PRIVATE-NOTE"}]}},
+                     "metadata": {"workflowReviewed": True},
+                     "contextId": "PRIVATE-CONTEXT"}],
+                           "pageSize": 10, "totalSize": 1, "nextPageToken": ""}}
+    def respond(request):
+        body = json.loads(request.content)
+        assert body["method"] == "ListTasks"
+        assert body["params"]["includeArtifacts"] is False
+        return httpx.Response(200, json=response)
+
+    client = CloudbrowserClient("https://cloud.example", "key",
+        transport=httpx.MockTransport(respond))
+    data = (await client.list_task_summaries())["data"]
+    assert len(data["tasks"]) == 1
+    assert data["tasks"][0]["completed_and_reviewed"] is True
+    assert data["tasks"][0]["artifact_count"] is None
+    assert data["total_size"] == 1
+    assert "PRIVATE-NOTE" not in repr(data)
+    assert "PRIVATE-CONTEXT" not in repr(data)
+    response["result"]["tasks"][0]["id"] = "bad/id"
+    with pytest.raises(CloudbrowserError, match="UPSTREAM_TASK_ID_INVALID"):
+        await client.list_task_summaries()
+    response["result"]["tasks"][0]["id"] = "job-1"
+    response["result"]["nextPageToken"] = "not-a-page"
+    with pytest.raises(CloudbrowserError, match="UPSTREAM_TASK_PAGINATION_INVALID"):
+        await client.list_task_summaries()
+
+
+@pytest.mark.asyncio
+async def test_rpc_method_allowlist_denies_mutating_methods_without_network():
+    client = CloudbrowserClient("https://cloud.example", "key",
+        transport=httpx.MockTransport(lambda _: pytest.fail("must not call upstream")))
+    with pytest.raises(CloudbrowserError, match="UPSTREAM_METHOD_NOT_ALLOWED"):
+        await client._rpc("SendMessage", {"message": {"parts": [{"text": "unsafe"}]}})
+
+
+@pytest.mark.asyncio
+async def test_cloudbrowser_mcp_refuses_unlogged_read(monkeypatch):
+    from mcp import Client
+    from mcp.server import MCPServer
+    from im19_mcp.server import register_tools
+
+    counter = {"requests": 0}
+
+    class FailingVault:
+        audit_salt = ""
+
+        def audit(self, *args, **kwargs):
+            raise OSError("audit backend unavailable")
+
+    class Factory:
+        def __init__(self, *args):
+            counter["requests"] += 1
+
+        async def agent_card(self):
+            return {"name": "should not run"}
+
+    cfg = replace(settings(), cloudbrowser_url="https://cloud.example",
+                  cloudbrowser_api_key="z" * 40,
+                  cloudbrowser_allowed_subjects=("user-1",))
+    server = MCPServer("audit-required")
+    register_tools(server, settings=cfg, vault=FailingVault(), oauth=None,
+                   allow_stdio_dev=True, cloudbrowser_factory=Factory)
+    monkeypatch.setenv("IM19_DEV_SUBJECT", "user-1")
+    async with Client(server) as mcp:
+        response = await mcp.call_tool("cloudbrowser_get_agent_card", {})
+        import json
+        data = (response.structured_content if response.structured_content is not None
+                else json.loads(response.content[0].text))
+        assert data == {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+    assert counter["requests"] == 0

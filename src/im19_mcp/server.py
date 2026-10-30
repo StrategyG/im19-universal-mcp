@@ -483,6 +483,10 @@ def register_tools(
         denied = await async_tool_quota(user, "mcp:cloudbrowser-reads", limit=20)
         if denied is not None:
             return denied
+        # Refuse the network read if an institutional audit record cannot be written.
+        # This is especially important because the upstream credential is owner-wide.
+        if not await audit(user, "cloudbrowser", action, "START"):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
         try:
             client = cloudbrowser_factory(settings.cloudbrowser_url, settings.cloudbrowser_api_key)
             result = await operation(client)
@@ -514,6 +518,19 @@ def register_tools(
     async def cloudbrowser_get_task_summary(task_id: str) -> dict:
         """Structured workflow status (reviewed vs waiting/failed) without status prose."""
         return await cloudbrowser_read("cloudbrowser_get_task_summary", lambda c: c.task_summary(task_id))
+
+    @server.tool(name="cloudbrowser_list_task_summaries")
+    async def cloudbrowser_list_task_summaries(page_size: int = 10, page_token: str = "") -> dict:
+        """List reviewed / waiting / failed states without exposing private task prose."""
+        return await cloudbrowser_read(
+            "cloudbrowser_list_task_summaries",
+            lambda c: c.list_task_summaries(page_size, page_token),
+        )
+
+    @server.tool(name="cloudbrowser_get_readiness")
+    async def cloudbrowser_get_readiness() -> dict:
+        """Read Cloudbrowser operational database, worker and Telegram readiness checks."""
+        return await cloudbrowser_read("cloudbrowser_get_readiness", lambda c: c.readiness())
 
     @server.tool(name="cloudbrowser_list_tasks")
     async def cloudbrowser_list_tasks(page_size: int = 10, page_token: str = "") -> dict:

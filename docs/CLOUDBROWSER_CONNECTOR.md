@@ -45,6 +45,8 @@ The resulting tools are:
 | `cloudbrowser_get_task(task_id)` | Read A2A task status for a validated ID |
 | `cloudbrowser_list_tasks(page_size, page_token)` | List max 20 tasks per page; no artifact bodies |
 | `cloudbrowser_get_task_summary(task_id)` | Stable A2A state, requires_owner_input, is_terminal, workflow_reviewed, completed_and_reviewed, artifact_count |
+| `cloudbrowser_list_task_summaries(page_size, page_token)` | Safe task-state list with no raw messages or artifact links |
+| `cloudbrowser_get_readiness` | Database, worker, Telegram operational checks from /readyz (HTTP 503 means not ready) |
 
 All results are untrusted and bounded. Requests have short timeouts; redirects
 are disabled; failed auth, malformed responses, and upstream errors fail closed.
@@ -94,3 +96,34 @@ CI checks a pinned Cloudbrowser source revision
 ASGI application and an in-memory HTTP transport. This proves a wire contract,
 not running deployment/third-party service readiness. Update the pinned SHA
 and rerun the contract check whenever Cloudbrowser's A2A API changes.
+
+
+
+## Additional operational reliability controls
+
+- **Readiness:** `cloudbrowser_get_readiness` reads the existing Cloudbrowser
+  `GET /readyz` contract, treating HTTP 503 with valid JSON as a diagnostic
+  (not a connection exception). The result exposes only fixed boolean checks
+  `database`, `worker`, and `telegram`; this is *not* an end-to-end model,
+  browser, or render acceptance test.
+- **Safe task list:** prefer `cloudbrowser_list_task_summaries` for monitoring.
+  It redacts arbitrary status prose, metadata and artifact download URLs.
+  `artifact_count=null` means the list RPC omitted artifacts; it does **not**
+  mean there are zero files.
+- **Audit-before-read:** admission writes `START` to the existing audit ledger
+  before contacting Cloudbrowser and `SUCCESS`/`ERROR` after completion.
+  If the ledger cannot be written, the upstream request is blocked.
+- **Protocol allowlist:** the A2A client refuses any JSON-RPC method except
+  `GetTask` and `ListTasks`; it does not provide workflow mutation or
+  arbitrary method dispatch.
+- **Response safety:** JSON content types and bounded responses are required.
+  Remote task and pagination fields must match known types before building
+  state summaries.
+
+## Deployment acceptance
+
+A GitHub Actions contract test against a pinned Cloudbrowser source commit
+cannot establish production connectivity. Configure real credentials in the
+deployment secret manager, prove HTTPS/TLS reachability, read a real task,
+verify denied cross-user access, verify audit records, and reconcile
+approvals with Cloudbrowser's own independent owner-approval mechanism.

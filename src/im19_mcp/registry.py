@@ -39,7 +39,8 @@ SERVICES: dict[str, Service] = {
     "cloudbrowser": Service(
         "Cloudbrowser A2A", "cloudbrowser", (),
         ("cloudbrowser_get_agent_card", "cloudbrowser_get_task", "cloudbrowser_get_task_summary",
-         "cloudbrowser_list_tasks"), True,
+         "cloudbrowser_list_tasks", "cloudbrowser_list_task_summaries",
+         "cloudbrowser_get_readiness"), True,
     ),
 }
 
