@@ -510,6 +510,11 @@ def register_tools(
         """Read one Cloudbrowser orchestrator task by ID; cannot modify the task."""
         return await cloudbrowser_read("cloudbrowser_get_task", lambda c: c.get_task(task_id))
 
+    @server.tool(name="cloudbrowser_get_task_summary")
+    async def cloudbrowser_get_task_summary(task_id: str) -> dict:
+        """Structured workflow status (reviewed vs waiting/failed) without status prose."""
+        return await cloudbrowser_read("cloudbrowser_get_task_summary", lambda c: c.task_summary(task_id))
+
     @server.tool(name="cloudbrowser_list_tasks")
     async def cloudbrowser_list_tasks(page_size: int = 10, page_token: str = "") -> dict:
         """Read a bounded page of orchestrator A2A tasks; no artifact downloads."""

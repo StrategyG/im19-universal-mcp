@@ -61,6 +61,12 @@ async def verify():
             assert {"binding": "JSONRPC", "version": "1.0"} in card["protocols"], card
             task = await connector.get_task(job["id"])
             assert task["data"]["id"] == job["id"], task
+            summary = await connector.task_summary(job["id"])
+            assert summary["data"]["state"] == "TASK_STATE_SUBMITTED", summary
+            assert summary["data"]["completed_and_reviewed"] is False, summary
+            app.state.store.update_job(job["id"], status="awaiting_approval", result="Needs owner input")
+            summary = await connector.task_summary(job["id"])
+            assert summary["data"]["requires_owner_input"] is True, summary
             tasks = await connector.list_tasks()
             assert tasks["data"]["tasks"][0]["id"] == job["id"], tasks
 
@@ -72,7 +78,7 @@ async def verify():
                 assert str(error) == "UPSTREAM_AUTH_DENIED", str(error)
             else:
                 raise AssertionError("A2A rejected-key test must fail closed")
-            print("PASS Cloudbrowser A2A 1.0: discovery, GetTask, ListTasks, deny wrong bearer")
+            print("PASS Cloudbrowser A2A 1.0: card pinning, GetTask, ListTasks, normalized status, deny bad bearer")
         finally:
             await app.state.agent.close()
             app.state.store.close()

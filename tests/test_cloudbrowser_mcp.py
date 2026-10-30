@@ -50,7 +50,7 @@ async def test_cloudbrowser_a2a_methods_are_fixed_and_authenticated():
             return httpx.Response(200, json={"name": "Cloudbrowser",
                 "version": "0.4", "supportedInterfaces": [
                     {"protocolBinding": "JSONRPC", "protocolVersion": "1.0",
-                     "url": "https://evil.example/steal"}]})
+                     "url": "https://cloud.example/a2a/rpc"}]})
         body = __import__("json").loads(request.content)
         if body["method"] == "GetTask":
             assert body["params"]["id"] == "task-1"
@@ -65,7 +65,7 @@ async def test_cloudbrowser_a2a_methods_are_fixed_and_authenticated():
                                 transport=httpx.MockTransport(respond))
     card = await client.agent_card()
     assert card["protocols"][0]["version"] == "1.0"
-    assert "evil.example" not in repr(card)
+    assert "https://cloud.example/a2a/rpc" not in repr(card)
     assert (await client.get_task("task-1"))["data"]["id"] == "task-1"
     assert (await client.list_tasks())["data"]["tasks"] == []
     assert len(seen) == 3
@@ -114,6 +114,10 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
         async def get_task(self, task_id):
             return {"data": {"id": task_id}, "untrusted": True}
 
+        async def task_summary(self, task_id):
+            return {"data": {"id": task_id, "state": "TASK_STATE_WORKING"},
+                    "untrusted": True}
+
         async def list_tasks(self, page_size, page_token):
             return {"data": {"tasks": []}, "untrusted": True}
 
@@ -127,7 +131,7 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
     async with Client(server) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
         assert {"cloudbrowser_get_agent_card", "cloudbrowser_get_task",
-                "cloudbrowser_list_tasks"}.issubset(names)
+                "cloudbrowser_get_task_summary", "cloudbrowser_list_tasks"}.issubset(names)
         ok = await client.call_tool("cloudbrowser_get_task", {"task_id": "job123"})
         assert not ok.is_error, str(ok.content)
         from json import loads
@@ -143,3 +147,55 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
         payload = (no_identity.structured_content if no_identity.structured_content is not None
                    else loads(no_identity.content[0].text))
         assert payload["status"] == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_precise_workflow_state_summary():
+    import json
+
+    state = {"id": "task-1", "status": {"state": "TASK_STATE_INPUT_REQUIRED",
+                                     "timestamp": "2026-10-30T00:00:00Z"},
+             "metadata": {"workflowReviewed": False},
+             "artifacts": [{"artifactId": "a1", "parts": [{"url": "https://private.test"}]}]}
+
+    def respond(request):
+        args = json.loads(request.content)
+        assert args["method"] == "GetTask"
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "im19-read", "result": state})
+
+    client = CloudbrowserClient("https://cloud.example", "test-key",
+                                transport=httpx.MockTransport(respond))
+    summary = (await client.task_summary("task-1"))["data"]
+    assert summary["requires_owner_input"] is True
+    assert summary["is_terminal"] is False
+    assert summary["completed_and_reviewed"] is False
+    assert summary["artifact_count"] == 1
+    assert "private.test" not in str(summary)
+
+    state["status"]["state"] = "TASK_STATE_COMPLETED"
+    summary = (await client.task_summary("task-1"))["data"]
+    assert summary["is_terminal"] is True and summary["completed_and_reviewed"] is False
+    state["metadata"]["workflowReviewed"] = True
+    summary = (await client.task_summary("task-1"))["data"]
+    assert summary["completed_and_reviewed"] is True
+    state["status"]["state"] = "UNKNOWN"
+    with pytest.raises(CloudbrowserError, match="UPSTREAM_TASK_STATE_INVALID"):
+        await client.task_summary("task-1")
+    state["id"] = "another-task"
+    with pytest.raises(CloudbrowserError, match="UPSTREAM_TASK_ID_MISMATCH"):
+        await client.task_summary("task-1")
+
+
+@pytest.mark.asyncio
+async def test_agent_card_must_pin_declared_rpc_origin():
+    for provided_url in ("https://evil.example/a2a/rpc",
+                         "https://cloud.example/another-route", ""):
+        client = CloudbrowserClient(
+            "https://cloud.example", "key",
+            transport=httpx.MockTransport(lambda _: httpx.Response(
+                200, json={"name": "Cloudbrowser", "supportedInterfaces": [{
+                    "protocolBinding": "JSONRPC", "protocolVersion": "1.0",
+                    "url": provided_url}]})),
+        )
+        with pytest.raises(CloudbrowserError, match="UPSTREAM_A2A_CONTRACT_MISMATCH"):
+            await client.agent_card()

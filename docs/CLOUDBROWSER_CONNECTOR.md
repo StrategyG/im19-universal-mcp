@@ -44,6 +44,7 @@ The resulting tools are:
 | `cloudbrowser_get_agent_card` | Bounded, sanitized discovery metadata |
 | `cloudbrowser_get_task(task_id)` | Read A2A task status for a validated ID |
 | `cloudbrowser_list_tasks(page_size, page_token)` | List max 20 tasks per page; no artifact bodies |
+| `cloudbrowser_get_task_summary(task_id)` | Stable A2A state, requires_owner_input, is_terminal, workflow_reviewed, completed_and_reviewed, artifact_count |
 
 All results are untrusted and bounded. Requests have short timeouts; redirects
 are disabled; failed auth, malformed responses, and upstream errors fail closed.
@@ -73,3 +74,23 @@ python -m ruff check src/im19_mcp/cloudbrowser.py tests/test_cloudbrowser_mcp.py
 This is component validation, **not** live deployment acceptance. Verify A2A
 credentials, ACL, outbound TLS/egress policy, logs and operational controls in
 the deployed environment before enabling.
+
+
+## Precise workflow reporting
+
+Use `cloudbrowser_get_task_summary` for agent decisions. The tool checks
+that the upstream GetTask ID matches the requested ID and recognizes
+`TASK_STATE_SUBMITTED`, `TASK_STATE_WORKING`, `TASK_STATE_INPUT_REQUIRED`,
+`TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, and
+`TASK_STATE_CANCELED`. A task marked `COMPLETED` is **not** a reviewed
+workflow unless Cloudbrowser's `metadata.workflowReviewed` is exactly true.
+`INPUT_REQUIRED` means seek owner intervention; never automatically repeat
+a remote mutation. Artifact references are counted but are not fetched by this
+tool. Agent-card protocol and RPC URL must match exactly the pinned
+`IM19_CLOUDBROWSER_URL` and A2A JSON-RPC 1.0.
+
+CI checks a pinned Cloudbrowser source revision
+(`4d65dcd07e984591b16238fb168675d22e9326a3`) using its real
+ASGI application and an in-memory HTTP transport. This proves a wire contract,
+not running deployment/third-party service readiness. Update the pinned SHA
+and rerun the contract check whenever Cloudbrowser's A2A API changes.

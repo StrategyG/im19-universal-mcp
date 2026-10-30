@@ -38,7 +38,8 @@ SERVICES: dict[str, Service] = {
     "github": Service("GitHub", "github", (), (), False),
     "cloudbrowser": Service(
         "Cloudbrowser A2A", "cloudbrowser", (),
-        ("cloudbrowser_get_agent_card", "cloudbrowser_get_task", "cloudbrowser_list_tasks"), True,
+        ("cloudbrowser_get_agent_card", "cloudbrowser_get_task", "cloudbrowser_get_task_summary",
+         "cloudbrowser_list_tasks"), True,
     ),
 }
 
