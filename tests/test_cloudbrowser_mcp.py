@@ -127,9 +127,11 @@ async def test_mcp_discovery_and_subject_isolation(monkeypatch):
         async def list_tasks(self, page_size, page_token):
             return {"data": {"tasks": []}, "untrusted": True}
 
+    # Explicitly exercise the owner-approved raw task exception.
     cfg = replace(settings(), cloudbrowser_url="https://cloud.example",
                   cloudbrowser_api_key="k" * 40,
-                  cloudbrowser_allowed_subjects=("trusted-subject",))
+                  cloudbrowser_allowed_subjects=("trusted-subject",),
+                  cloudbrowser_allow_raw_tasks=True)
     server = MCPServer("IM19 Cloudbrowser test")
     register_tools(server, settings=cfg, vault=None, oauth=None, allow_stdio_dev=True,
                    cloudbrowser_factory=lambda url, secret: FakeCloudbrowser())
