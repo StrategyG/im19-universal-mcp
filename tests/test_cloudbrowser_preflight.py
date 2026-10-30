@@ -159,3 +159,82 @@ async def test_production_stdio_never_accepts_environment_subject(monkeypatch):
         payload = (response.structured_content if response.structured_content is not None
                    else json.loads(response.content[0].text))
         assert payload["status"] == "AUTH_REQUIRED"
+
+
+def production_cfg():
+    return replace(
+        cfg(), deployment_environment="production",
+        database_url="postgresql+psycopg://test-user:PRIVATE@localhost:5432/im19",
+        vault_key="example-test-only-vault-key", audit_salt="a" * 40,
+        mcp_issuer="https://issuer.example",
+        mcp_resource="https://gateway.example/mcp",
+        mcp_introspection="https://issuer.example/introspect",
+        mcp_client_id="test-client", mcp_client_secret="test-secret",
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_live_must_validate_im19_schema_before_cloudbrowser():
+    called = {"client": 0, "database": 0}
+
+    def db_check(url):
+        called["database"] += 1
+        assert "postgresql+psycopg://" in url
+        return False
+
+    def forbidden_client(*_):
+        called["client"] += 1
+        pytest.fail("Cloudbrowser must not be probed when IM19 database is not ready")
+
+    report = await assess_cloudbrowser(mode="remote", live=True, settings=production_cfg(),
+                                       database_checker=db_check, client_factory=forbidden_client)
+    assert report["status"] == "IM19_DATABASE_NOT_READY"
+    assert report["checks"]["im19_database_schema_ready"] is False
+    assert report["production_acceptance"] is False
+    assert called == {"client": 0, "database": 1}
+    assert "PRIVATE" not in repr(report)
+
+
+@pytest.mark.asyncio
+async def test_remote_schema_check_exception_is_sanitized():
+    def throw_secret(_):
+        raise RuntimeError("PRIVATE-DB-ERROR")
+
+    report = await assess_cloudbrowser(mode="remote", live=True, settings=production_cfg(),
+                                       database_checker=throw_secret)
+    assert report["status"] == "IM19_DATABASE_NOT_READY"
+    assert "PRIVATE" not in repr(report)
+
+
+@pytest.mark.asyncio
+async def test_remote_preflight_database_pass_then_readonly_probe():
+    calls = []
+
+    class Client:
+        def __init__(self, *_):
+            calls.append("client")
+
+        async def agent_card(self):
+            calls.append("card")
+            return {"name": "Cloudbrowser"}
+
+        async def readiness(self):
+            calls.append("ready")
+            return {"data": {"ready": True, "checks": {
+                "database": True, "worker": True, "telegram": True}}}
+
+        async def list_task_summaries(self, page_size):
+            calls.append("authorized_read")
+            assert page_size == 1
+            return {"data": {"tasks": []}}
+
+    def db_check(_):
+        calls.append("im19_schema")
+        return True
+
+    report = await assess_cloudbrowser(mode="remote", live=True, settings=production_cfg(),
+                                       client_factory=Client, database_checker=db_check)
+    assert report["passed"] is True
+    assert report["checks"]["im19_database_schema_ready"] is True
+    assert report["production_acceptance"] is False
+    assert calls == ["im19_schema", "client", "card", "ready", "authorized_read"]

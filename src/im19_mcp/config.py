@@ -50,6 +50,7 @@ class Settings:
     cloudbrowser_url: str = ""
     cloudbrowser_api_key: str = field(default="", repr=False)
     cloudbrowser_allowed_subjects: tuple[str, ...] = ()
+    cloudbrowser_allow_raw_tasks: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,6 +86,9 @@ class Settings:
                 part.strip() for part in os.getenv("IM19_CLOUDBROWSER_ALLOWED_SUBJECTS", "").split(",")
                 if part.strip()
             ),
+            cloudbrowser_allow_raw_tasks=os.getenv(
+                "IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", "false"
+            ).strip().lower() == "true",
         )
 
     def browser_enabled(self) -> bool:

@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: StrategyG/Cloudbrowser
-          ref: 4d65dcd07e984591b16238fb168675d22e9326a3
+          ref: 0d0c4d2a38f79ed280e0967a3d959c3f1daf4633
           path: cloudbrowser_upstream
           persist-credentials: false
       - uses: actions/setup-python@v5

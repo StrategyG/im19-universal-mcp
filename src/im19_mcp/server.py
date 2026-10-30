@@ -480,6 +480,11 @@ def register_tools(
             return {"status": "NOT_CONFIGURED", "service": "cloudbrowser"}
         if user not in settings.cloudbrowser_allowed_subjects:
             return {"status": "DENY", "reason": "subject_not_allowlisted"}
+        # Privacy check comes AFTER verified subject authorization, never before.
+        if (action in {"cloudbrowser_get_task", "cloudbrowser_list_tasks"}
+                and settings.deployment_environment == "production"
+                and not settings.cloudbrowser_allow_raw_tasks):
+            return {"status": "DENY", "reason": "raw_cloudbrowser_tasks_disabled"}
         # Production remote reads require both persistent audit and shared quotas.
         if (settings.deployment_environment == "production" and not allow_stdio_dev
                 and (vault is None or distributed_quota is None)):
@@ -515,7 +520,7 @@ def register_tools(
 
     @server.tool(name="cloudbrowser_get_task")
     async def cloudbrowser_get_task(task_id: str) -> dict:
-        """Read one Cloudbrowser orchestrator task by ID; cannot modify the task."""
+        """Raw tasks can expose private messages and URLs; disabled by default in production."""
         return await cloudbrowser_read("cloudbrowser_get_task", lambda c: c.get_task(task_id))
 
     @server.tool(name="cloudbrowser_get_task_summary")
@@ -538,7 +543,7 @@ def register_tools(
 
     @server.tool(name="cloudbrowser_list_tasks")
     async def cloudbrowser_list_tasks(page_size: int = 10, page_token: str = "") -> dict:
-        """Read a bounded page of orchestrator A2A tasks; no artifact downloads."""
+        """Raw task metadata may include sensitive content; opt in explicitly in production."""
         return await cloudbrowser_read(
             "cloudbrowser_list_tasks", lambda c: c.list_tasks(page_size, page_token)
         )
