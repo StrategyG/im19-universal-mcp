@@ -108,3 +108,54 @@ def test_unconfigured_cli_exits_nonzero_without_network(monkeypatch, capsys):
         monkeypatch.delenv(key, raising=False)
     assert main(["--mode", "local"]) == 1
     assert '"production_acceptance": false' in capsys.readouterr().out
+
+
+
+@pytest.mark.asyncio
+async def test_remote_production_read_fails_closed_without_audit_or_quota(monkeypatch):
+    import json
+    from mcp import Client
+    from mcp.server import MCPServer
+    from im19_mcp.server import register_tools
+
+    calls = {"started": 0}
+
+    class FakeCloudbrowser:
+        def __init__(self, *_):
+            calls["started"] += 1
+
+        async def agent_card(self):
+            return {"name": "must never be contacted"}
+
+    production = replace(cfg(), deployment_environment="production")
+    server = MCPServer("fail-closed-production")
+    # Only an authenticated subject may enter this path; the test supplies
+    # a mock identity, but production configuration intentionally omits vault
+    # and shared quota to prove admission is denied before network access.
+    monkeypatch.setattr("im19_mcp.server.authenticated_subject",
+                        lambda *, allow_stdio_dev=False: "owner")
+    register_tools(server, settings=production, vault=None, oauth=None,
+                   allow_stdio_dev=False, cloudbrowser_factory=FakeCloudbrowser)
+    async with Client(server) as client:
+        result = await client.call_tool("cloudbrowser_get_agent_card", {})
+        payload = (result.structured_content if result.structured_content is not None
+                   else json.loads(result.content[0].text))
+        assert payload["status"] == "SERVICE_UNAVAILABLE"
+        assert payload["reason"] == "governance_backend_unavailable"
+    assert calls["started"] == 0
+
+
+@pytest.mark.asyncio
+async def test_production_stdio_never_accepts_environment_subject(monkeypatch):
+    import json
+    from mcp import Client
+    from im19_mcp.server import create_stdio_server
+
+    monkeypatch.setenv("IM19_DEV_SUBJECT", "owner")
+    production = replace(cfg(), deployment_environment="production")
+    server = create_stdio_server(settings=production)
+    async with Client(server) as client:
+        response = await client.call_tool("cloudbrowser_get_readiness", {})
+        payload = (response.structured_content if response.structured_content is not None
+                   else json.loads(response.content[0].text))
+        assert payload["status"] == "AUTH_REQUIRED"
