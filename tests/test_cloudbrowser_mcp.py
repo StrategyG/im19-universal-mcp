@@ -99,3 +99,41 @@ async def test_upstream_errors_and_redirects_are_fail_closed():
                                     transport=httpx.MockTransport(lambda _: response))
         with pytest.raises(CloudbrowserError):
             await client.list_tasks()
+
+
+@pytest.mark.asyncio
+async def test_mcp_discovery_and_subject_isolation(monkeypatch):
+    from mcp import Client
+    from mcp.server import MCPServer
+    from im19_mcp.server import register_tools
+
+    class FakeCloudbrowser:
+        async def agent_card(self):
+            return {"name": "demo", "untrusted": True}
+
+        async def get_task(self, task_id):
+            return {"data": {"id": task_id}, "untrusted": True}
+
+        async def list_tasks(self, page_size, page_token):
+            return {"data": {"tasks": []}, "untrusted": True}
+
+    cfg = replace(settings(), cloudbrowser_url="https://cloud.example",
+                  cloudbrowser_api_key="k" * 40,
+                  cloudbrowser_allowed_subjects=("trusted-subject",))
+    server = MCPServer("IM19 Cloudbrowser test")
+    register_tools(server, settings=cfg, vault=None, oauth=None, allow_stdio_dev=True,
+                   cloudbrowser_factory=lambda url, secret: FakeCloudbrowser())
+    monkeypatch.setenv("IM19_DEV_SUBJECT", "trusted-subject")
+    async with Client(server) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert {"cloudbrowser_get_agent_card", "cloudbrowser_get_task",
+                "cloudbrowser_list_tasks"}.issubset(names)
+        ok = await client.call_tool("cloudbrowser_get_task", {"task_id": "job123"})
+        assert ok.structured_content["status"] == "OK"
+        assert ok.structured_content["data"]["id"] == "job123"
+        monkeypatch.setenv("IM19_DEV_SUBJECT", "other-subject")
+        denied = await client.call_tool("cloudbrowser_list_tasks", {})
+        assert denied.structured_content["status"] == "DENY"
+        monkeypatch.delenv("IM19_DEV_SUBJECT")
+        no_identity = await client.call_tool("cloudbrowser_get_agent_card", {})
+        assert no_identity.structured_content["status"] == "AUTH_REQUIRED"
