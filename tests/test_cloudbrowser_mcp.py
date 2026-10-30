@@ -310,3 +310,48 @@ async def test_cloudbrowser_mcp_refuses_unlogged_read(monkeypatch):
                 else json.loads(response.content[0].text))
         assert data == {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
     assert counter["requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_production_raw_task_data_disabled_by_default_but_summaries_available(monkeypatch):
+    import json
+    from mcp import Client
+    from mcp.server import MCPServer
+    from im19_mcp.server import register_tools
+
+    calls = {"factory": 0}
+
+    class MockClient:
+        def __init__(self, *_):
+            calls["factory"] += 1
+
+        async def task_summary(self, task_id):
+            return {"data": {"id": task_id}, "untrusted": True}
+
+    cfg = replace(settings(), deployment_environment="production",
+                  cloudbrowser_url="https://cloud.example",
+                  cloudbrowser_api_key="z" * 40,
+                  cloudbrowser_allowed_subjects=("owner",))
+    monkeypatch.setattr("im19_mcp.server.authenticated_subject",
+                        lambda *, allow_stdio_dev=False: "owner")
+    server = MCPServer("production raw denied")
+    register_tools(server, settings=cfg, vault=None, oauth=None,
+                   allow_stdio_dev=False, cloudbrowser_factory=MockClient)
+
+    async with Client(server) as client:
+        for tool, arguments in (("cloudbrowser_get_task", {"task_id": "private-task"}),
+                                ("cloudbrowser_list_tasks", {})):
+            resp = await client.call_tool(tool, arguments)
+            data = resp.structured_content if resp.structured_content is not None else json.loads(resp.content[0].text)
+            assert data["status"] == "DENY"
+            assert data["reason"] == "raw_cloudbrowser_tasks_disabled"
+    assert calls["factory"] == 0
+
+
+def test_allow_raw_tasks_flag_defaults_off_and_is_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv("IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", raising=False)
+    assert Settings.from_env().cloudbrowser_allow_raw_tasks is False
+    monkeypatch.setenv("IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", "true")
+    assert Settings.from_env().cloudbrowser_allow_raw_tasks is True
+    monkeypatch.setenv("IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", "yes")
+    assert Settings.from_env().cloudbrowser_allow_raw_tasks is False

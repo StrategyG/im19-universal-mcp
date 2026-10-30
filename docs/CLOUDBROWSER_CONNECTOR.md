@@ -92,7 +92,7 @@ tool. Agent-card protocol and RPC URL must match exactly the pinned
 `IM19_CLOUDBROWSER_URL` and A2A JSON-RPC 1.0.
 
 CI checks a pinned Cloudbrowser source revision
-(`4d65dcd07e984591b16238fb168675d22e9326a3`) using its real
+(`0d0c4d2a38f79ed280e0967a3d959c3f1daf4633`) using its real
 ASGI application and an in-memory HTTP transport. This proves a wire contract,
 not running deployment/third-party service readiness. Update the pinned SHA
 and rerun the contract check whenever Cloudbrowser's A2A API changes.
@@ -150,3 +150,24 @@ readiness, **not** full production acceptance. Remaining gates include live
 identity isolation, audit/quotas, recovery drills and deployment approval.
 Production remote reads refuse to run without an injected audit vault
 and distributed quota; production stdio cannot use `IM19_DEV_SUBJECT`.
+
+
+## Production privacy and local database gate
+
+Cloudbrowser's raw GetTask/ListTasks responses can contain private result
+messages, context IDs and artifact URLs. In **production** both
+`cloudbrowser_get_task` and `cloudbrowser_list_tasks` are disabled by
+default; use `cloudbrowser_get_task_summary` and
+`cloudbrowser_list_task_summaries` for routine monitoring.
+For a deliberate, documented operator-only exception, set
+`IM19_CLOUDBROWSER_ALLOW_RAW_TASKS=true` on the IM19 server.
+This changes neither OAuth subject allowlisting nor audit/rate-limit checks,
+and never enables task mutation.
+
+The remote live preflight now checks the IM19 database schema and current
+Alembic revision before contacting Cloudbrowser, using bounded connection
+and statement timeouts. It returns `IM19_DATABASE_NOT_READY` if the
+database cannot be reached or is not fully migrated, while never exposing
+database URLs or upstream exception strings. A passing live probe still
+**does not** constitute production release approval, backup/restore evidence,
+full RBAC testing, or autonomous workflow certification.

@@ -6,14 +6,26 @@ import asyncio
 import json
 from typing import Callable
 
+from im19_mcp.database import database_engine
+from im19_mcp.readiness import database_ready
 from im19_mcp.cloudbrowser import CloudbrowserClient
 from im19_mcp.config import Settings
+
+
+def check_im19_database(url: str) -> bool:
+    """Bounded, read-only database schema verification; never return DB details."""
+    engine = database_engine(url)
+    try:
+        return bool(database_ready(engine))
+    finally:
+        engine.dispose()
 
 
 async def assess_cloudbrowser(
     *, mode: str = "remote", live: bool = False,
     settings: Settings | None = None,
     client_factory: Callable = CloudbrowserClient,
+    database_checker: Callable[[str], bool] = check_im19_database,
 ) -> dict:
     if mode not in {"local", "remote"}:
         raise ValueError("invalid_mode")
@@ -42,6 +54,19 @@ async def assess_cloudbrowser(
         return result
     if not live:
         return result
+    # In remote mode, validate our OWN persistent schema before contacting the
+    # owner-wide Cloudbrowser service. CI's local mock mode remains network-free.
+    if mode == "remote":
+        checks["im19_database_schema_ready"] = False
+        try:
+            checks["im19_database_schema_ready"] = (
+                await asyncio.to_thread(database_checker, cfg.database_url)
+            ) is True
+        except Exception:
+            checks["im19_database_schema_ready"] = False
+        if not checks["im19_database_schema_ready"]:
+            result["status"] = "IM19_DATABASE_NOT_READY"
+            return result
     try:
         client = client_factory(cfg.cloudbrowser_url, cfg.cloudbrowser_api_key)
         await client.agent_card()
