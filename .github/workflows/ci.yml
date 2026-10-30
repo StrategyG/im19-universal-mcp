@@ -52,6 +52,10 @@ jobs:
           /tmp/im19-wheel/bin/pip install --no-deps dist/*.whl
           cd /tmp
           /tmp/im19-wheel/bin/im19-mcp-doctor --mode local
+          if /tmp/im19-wheel/bin/im19-cloudbrowser-doctor --mode local; then
+            echo "Cloudbrowser preflight must fail without live evidence" >&2
+            exit 1
+          fi
           /tmp/im19-wheel/bin/python -c 'from im19_mcp.browser_auth import BrowserAuthorization'
   cloudbrowser-contract:
     runs-on: ubuntu-latest
