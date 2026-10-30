@@ -480,6 +480,10 @@ def register_tools(
             return {"status": "NOT_CONFIGURED", "service": "cloudbrowser"}
         if user not in settings.cloudbrowser_allowed_subjects:
             return {"status": "DENY", "reason": "subject_not_allowlisted"}
+        # Production remote reads require both persistent audit and shared quotas.
+        if (settings.deployment_environment == "production" and not allow_stdio_dev
+                and (vault is None or distributed_quota is None)):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "governance_backend_unavailable"}
         denied = await async_tool_quota(user, "mcp:cloudbrowser-reads", limit=20)
         if denied is not None:
             return denied
@@ -551,7 +555,9 @@ def create_stdio_server(settings: Settings | None = None) -> MCPServer:
         vault.initialize_schema()
     oauth = GoogleOAuth(cfg, vault) if vault and cfg.google_enabled() else None
     server = MCPServer("IM19 Universal MCP", version=__version__)
-    register_tools(server, settings=cfg, vault=vault, oauth=oauth, allow_stdio_dev=True)
+    # Never treat an environment-provided development subject as a production identity.
+    register_tools(server, settings=cfg, vault=vault, oauth=oauth,
+                   allow_stdio_dev=cfg.deployment_environment != "production")
     return server
 
 

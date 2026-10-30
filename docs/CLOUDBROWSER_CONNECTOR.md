@@ -127,3 +127,26 @@ cannot establish production connectivity. Configure real credentials in the
 deployment secret manager, prove HTTPS/TLS reachability, read a real task,
 verify denied cross-user access, verify audit records, and reconcile
 approvals with Cloudbrowser's own independent owner-approval mechanism.
+
+
+## Deployment preflight
+
+Configure IM19 server secrets (including the exact authorized subject) and
+Cloudbrowser's A2A owner credentials in the secret manager, then run:
+
+```bash
+im19-cloudbrowser-doctor --mode remote
+im19-cloudbrowser-doctor --mode remote --live
+```
+
+The first command makes **no network calls** and cannot pass without live
+verification. The second calls only the pinned Cloudbrowser agent card,
+`/readyz`, and a **one-task read-only ListTasks** probe; it discards
+task content and prints only boolean checks and a fixed status code.
+No action submission, retry of mutations, artifact downloads, or secret output.
+
+A passing check proves temporary read-only connectivity and operational
+readiness, **not** full production acceptance. Remaining gates include live
+identity isolation, audit/quotas, recovery drills and deployment approval.
+Production remote reads refuse to run without an injected audit vault
+and distributed quota; production stdio cannot use `IM19_DEV_SUBJECT`.
