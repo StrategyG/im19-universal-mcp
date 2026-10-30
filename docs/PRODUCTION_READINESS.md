@@ -101,3 +101,21 @@ approval grants for Drive root-folder creation. Database schema revision
 `0006_write_approvals` and the exact browser redirect URI are required.
 Unit and simulated browser-route tests do not establish live account or
 ChatGPT write permission support. Production acceptance remains pending.
+
+## 28 October 2026 — production-release hardening candidate
+
+The repository now includes `compose.production.managed.yaml` as a separate
+managed-PostgreSQL deployment path, plus bounded streamed input for browser
+write approval. A regression test rejects invalid Content-Length and
+oversized transfer-encoded request bodies, and CI validates the Compose
+configuration using **synthetic**, non-production environment values.
+
+The current `main` has no GitHub branch protection/ruleset according to
+GitHub's API; manual administrator configuration is **BLOCKED** pending an
+admin-side ruleset change. See [production release gates](RELEASE_GATES_2026.md).
+
+This is a code-hardening release candidate only. Real OAuth, ChatGPT/mobile
+MCP access, managed PostgreSQL security, public ingress, backup/recovery,
+on-call alerting, authorization policy and feature-specific media execution
+remain **NOT VERIFIED**. Do not label the service production-ready solely
+because CI passes.

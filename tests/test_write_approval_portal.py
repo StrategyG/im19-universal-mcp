@@ -323,3 +323,62 @@ async def test_expired_approval_cleanup_without_credentials(portal, data):
     with pytest.raises(PermissionError):
         portal.status(ticket=pending["approval_request_id"],
                       subject="alice", account_id="google-A")
+
+
+@pytest.mark.asyncio
+async def test_browser_approval_form_bounded_without_trusting_client_length(data):
+    """Untrusted clients cannot trigger 500 or unbounded body allocation."""
+    from im19_mcp.gateway import create_app
+    cfg, _vault = data
+    app = create_app(cfg)
+    base_headers = {
+        "Origin": "https://mcp.test",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    async def too_large_chunked():
+        yield b"a" * 1024
+        yield b"b" * 1025
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://mcp.test",
+    ) as client:
+        malformed = await client.post(
+            "/approve/write/decision",
+            headers={**base_headers, "Content-Length": "invalid"},
+            content=b"x",
+        )
+        assert malformed.status_code == 403
+        assert malformed.json() == {"status": "APPROVAL_DENIED"}
+
+        negative = await client.post(
+            "/approve/write/decision",
+            headers={**base_headers, "Content-Length": "-1"},
+            content=b"x",
+        )
+        assert negative.status_code == 403
+
+        oversize_declared = await client.post(
+            "/approve/write/decision",
+            headers={**base_headers, "Content-Length": "2049"},
+            content=b"a" * 2049,
+        )
+        assert oversize_declared.status_code == 403
+
+        # HTTP chunked requests have no trustworthy Content-Length; count
+        # incoming bytes and deny before accumulating the full body.
+        streamed = await client.post(
+            "/approve/write/decision",
+            headers=base_headers,
+            content=too_large_chunked(),
+        )
+        assert streamed.status_code == 403
+
+        # A well-formed but invalid decision must still fail closed.
+        ordinary = await client.post(
+            "/approve/write/decision",
+            headers=base_headers,
+            content=b"decision=approve",
+        )
+        assert ordinary.status_code == 403
