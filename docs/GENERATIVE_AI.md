@@ -39,13 +39,13 @@ The configured worker must implement:
 
 - GET /v1/capabilities -> JSON with an array of supported stages
 - POST /v1/jobs -> JSON containing an opaque job_id. Request body contains stage,
-  allowlisted profile, prompt, input asset IDs and bounded parameters.
+  allowlisted profile, prompt, input asset IDs, bounded parameters and an Idempotency-Key header.
 - GET /v1/jobs/{job_id} -> status, optional progress, stage, output asset IDs and
   sanitized error code.
 
 Every request includes a bearer worker token, X-IM19-Principal (HMAC pseudonym)
 and a random X-IM19-Request-ID. The worker must enforce tenant ownership on every
-asset and job, idempotency, storage quotas, GPU admission, cancellation and retention.
+asset and job, idempotency-key deduplication, storage quotas, GPU admission, cancellation and retention.
 The worker must never trust the principal header unless network ingress authenticates
 IM19 and blocks direct public access.
 
