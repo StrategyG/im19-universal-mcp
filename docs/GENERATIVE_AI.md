@@ -28,8 +28,10 @@ be installed, licensed and tested separately.
 - Input references are opaque asset IDs, not arbitrary URLs or filesystem paths.
 - User-provided workflow JSON, shell commands, Python, model URLs and arbitrary
   callback URLs are never accepted.
-- Generation submission requires explicit confirmation and passes through the
-  existing per-subject quota and audit hooks.
+- Generation submission and cancellation require explicit confirmation and pass
+  through the existing per-subject quota and audit hooks.
+- Worker capability, progress and asset responses are strictly validated; malformed
+  worker output fails closed rather than being silently filtered.
 - Worker errors are normalized; prompts, tokens and upstream exception bodies are
   not written to logs or returned to callers.
 
@@ -42,6 +44,8 @@ The configured worker must implement:
   allowlisted profile, prompt, input asset IDs, bounded parameters and an Idempotency-Key header.
 - GET /v1/jobs/{job_id} -> status, optional progress, stage, output asset IDs and
   sanitized error code.
+- POST /v1/jobs/{job_id}/cancel -> one of cancelled, cancel_requested, succeeded
+  or failed. Cancellation is a request; a running model may not stop immediately.
 
 Every request includes a bearer worker token, X-IM19-Principal (HMAC pseudonym)
 and a random X-IM19-Request-ID. The worker must enforce tenant ownership on every
