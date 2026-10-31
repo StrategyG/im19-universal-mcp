@@ -71,7 +71,10 @@ class GenerativeClient:
     def _principal(self, subject: str) -> str:
         return hmac.new(self.settings.principal_salt.encode(), subject.encode(), hashlib.sha256).hexdigest()
 
-    async def _request(self, method: str, path: str, *, subject: str, payload: dict | None = None) -> dict:
+    async def _request(
+        self, method: str, path: str, *, subject: str,
+        payload: dict | None = None, idempotency_key: str | None = None,
+    ) -> dict:
         if not self.settings.enabled:
             raise GenerativeError("GENERATION_DISABLED")
         if not subject or len(subject) > 255:
@@ -86,6 +89,7 @@ class GenerativeClient:
                     "X-IM19-Principal": self._principal(subject),
                     "X-IM19-Request-ID": secrets.token_urlsafe(18),
                     "Accept": "application/json",
+                    **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
                 },
                 json=payload,
             )
@@ -123,9 +127,12 @@ class GenerativeClient:
     async def submit(
         self, *, subject: str, stage: str, profile: str, prompt: str,
         input_asset_ids: list[str], parameters: dict[str, Any], confirm: bool,
+        idempotency_key: str,
     ) -> dict:
         if not confirm:
             return {"status": "CONFIRMATION_REQUIRED", "required": "confirm=true"}
+        if not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            return {"status": "INVALID_ARGUMENT", "reason": "idempotency_key_invalid"}
         if stage not in STAGES:
             return {"status": "INVALID_ARGUMENT", "reason": "unsupported_stage"}
         if profile not in self.settings.allowed_profiles:
@@ -158,7 +165,7 @@ class GenerativeClient:
         data = await self._request("POST", "/v1/jobs", subject=subject, payload={
             "stage": stage, "profile": profile, "prompt": prompt.strip(),
             "input_asset_ids": input_asset_ids, "parameters": parameters,
-        })
+        }, idempotency_key=idempotency_key)
         job_id = data.get("job_id")
         if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
             raise GenerativeError("WORKER_INVALID_RESPONSE")
@@ -235,7 +242,8 @@ def register_generative_tools(
     async def generative_submit_job(
         stage: str, profile: str, prompt: str,
         input_asset_ids: list[str] | None = None,
-        parameters: dict | None = None, confirm: bool = False,
+        parameters: dict | None = None, idempotency_key: str = "",
+        confirm: bool = False,
     ) -> dict:
         """Submit a confirmed job: text-to-image, image-to-3D, 3D motion, or video."""
         user = subject_provider()
@@ -254,7 +262,7 @@ def register_generative_tools(
             result = await client.submit(
                 subject=user, stage=stage, profile=profile, prompt=prompt,
                 input_asset_ids=input_asset_ids or [], parameters=parameters or {},
-                confirm=confirm,
+                confirm=confirm, idempotency_key=idempotency_key,
             )
             if not await audit(user, "generative", "submit", "SUCCESS"):
                 return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
