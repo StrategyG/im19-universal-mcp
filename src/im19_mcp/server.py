@@ -166,6 +166,16 @@ def register_tools(
                 return {"status": "DENY", "reason": "subject_not_allowlisted"}
             return {"status": "CONFIGURED_NOT_LIVE_VERIFIED", "service": service,
                     "provider_live_verified": False}
+        if service == "generative":
+            from im19_mcp.generative import GenerativeSettings
+            try:
+                configured = GenerativeSettings.from_env(principal_salt=settings.audit_salt).enabled
+            except ValueError:
+                return {"status": "CONFIGURATION_INVALID", "service": service}
+            return {
+                "status": "CONFIGURED_NOT_LIVE_VERIFIED" if configured else "NOT_CONFIGURED",
+                "service": service, "worker_live_verified": False,
+            }
         if service not in {"youtube", "drive"}:
             return {"status": "NOT_IMPLEMENTED", "service": service}
         denied = tool_quota(user, "mcp:connection-status", limit=60)
