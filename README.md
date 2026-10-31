@@ -115,6 +115,8 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 ## Documentation
 
+- [Universal Generative AI — multimodal pipeline and worker contract](docs/GENERATIVE_AI.md)
+
 - [Architecture](docs/ARCHITECTURE.md)
 - [Institutional governance and idempotency](docs/GOVERNANCE.md)
 - [Offline credential encryption key rotation](docs/KEY_ROTATION.md)
