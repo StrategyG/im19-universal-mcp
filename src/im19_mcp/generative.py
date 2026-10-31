@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import math
 import os
 import re
 import secrets
@@ -93,6 +92,7 @@ class GenerativeClient:
                     **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
                 },
                 json=payload,
+                follow_redirects=False,
             )
             if response.status_code in (401, 403):
                 raise GenerativeError("WORKER_AUTH_FAILED")
@@ -187,7 +187,7 @@ class GenerativeClient:
             result["stage"] = stage
         progress = data.get("progress")
         if progress is not None:
-            if type(progress) not in (int, float) or not math.isfinite(progress) or not 0 <= progress <= 1:
+            if type(progress) not in (int, float) or not 0 <= progress <= 1:
                 raise GenerativeError("WORKER_INVALID_RESPONSE")
             result["progress"] = progress
         assets = data.get("output_asset_ids", [])
@@ -212,7 +212,7 @@ class GenerativeClient:
             "POST", "/v1/jobs/" + job_id + "/cancel", subject=subject,
         )
         state = data.get("status")
-        if state not in {"cancelled", "cancel_requested", "succeeded", "failed"}:
+        if not isinstance(state, str) or state not in {"cancelled", "cancel_requested", "succeeded", "failed"}:
             raise GenerativeError("WORKER_INVALID_RESPONSE")
         return {"status": state, "job_id": job_id}
 
