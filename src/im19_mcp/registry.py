@@ -38,7 +38,7 @@ SERVICES: dict[str, Service] = {
     "github": Service("GitHub", "github", (), (), False),
     "generative": Service(
         "IM19 Universal Generative AI", "self-hosted-worker", (),
-        ("generative_get_capabilities", "generative_submit_job", "generative_get_job"), True,
+        ("generative_get_capabilities", "generative_submit_job", "generative_get_job", "generative_cancel_job"), True,
     ),
     "cloudbrowser": Service(
         "Cloudbrowser A2A", "cloudbrowser", (),
