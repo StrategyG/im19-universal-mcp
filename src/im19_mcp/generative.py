@@ -21,6 +21,7 @@ STAGES = ("text_to_image", "image_to_3d", "3d_to_motion", "render_video", "full_
 _ASSET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _PROFILE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _ALLOWED_PARAMS = {"width", "height", "seed", "steps", "guidance", "fps", "frames", "quality"}
 _STATUS = {"queued", "accepted", "running", "succeeded", "failed", "cancelled"}
 
@@ -148,6 +149,12 @@ class GenerativeClient:
             return {"status": "INVALID_ARGUMENT", "reason": "fps_out_of_range"}
         if "frames" in parameters and (type(parameters["frames"]) is not int or not 1 <= parameters["frames"] <= 1800):
             return {"status": "INVALID_ARGUMENT", "reason": "frames_out_of_range"}
+        if "guidance" in parameters and (
+            type(parameters["guidance"]) not in (int, float) or not 0 <= parameters["guidance"] <= 30
+        ):
+            return {"status": "INVALID_ARGUMENT", "reason": "guidance_out_of_range"}
+        if "quality" in parameters and parameters["quality"] not in {"low", "medium", "high", "ultra"}:
+            return {"status": "INVALID_ARGUMENT", "reason": "quality_invalid"}
         data = await self._request("POST", "/v1/jobs", subject=subject, payload={
             "stage": stage, "profile": profile, "prompt": prompt.strip(),
             "input_asset_ids": input_asset_ids, "parameters": parameters,
@@ -163,7 +170,7 @@ class GenerativeClient:
             return {"status": "INVALID_ARGUMENT", "reason": "invalid_job_id"}
         data = await self._request("GET", "/v1/jobs/" + job_id, subject=subject)
         state = data.get("status")
-        if state not in _STATUS:
+        if not isinstance(state, str) or state not in _STATUS:
             raise GenerativeError("WORKER_INVALID_RESPONSE")
         result: dict[str, Any] = {"status": state, "job_id": job_id}
         stage = data.get("stage")
