@@ -182,3 +182,96 @@ class GenerativeClient:
             if isinstance(error_code, str) and re.fullmatch(r"[A-Z0-9_]{1,64}", error_code):
                 result["error_code"] = error_code
         return result
+
+
+
+def register_generative_tools(
+    server, *, settings, subject_provider, audit, quota,
+) -> None:
+    """Register authenticated, audited generation tools on the existing MCP server."""
+    from im19_mcp.generative import GenerativeClient, GenerativeError, GenerativeSettings
+
+    try:
+        generation_settings = GenerativeSettings.from_env(principal_salt=settings.audit_salt)
+        client = GenerativeClient(generation_settings)
+        configuration_error = None
+    except ValueError:
+        client = None
+        configuration_error = "generative_configuration_invalid"
+
+    def unavailable() -> dict:
+        if configuration_error:
+            return {"status": "NOT_CONFIGURED", "reason": configuration_error}
+        return {"status": "NOT_CONFIGURED", "reason": "generation_worker_not_enabled"}
+
+    @server.tool(name="generative_get_capabilities")
+    async def generative_get_capabilities() -> dict:
+        """List multimodal generation stages exposed by the configured worker."""
+        user = subject_provider()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if client is None or not client.settings.enabled:
+            return unavailable()
+        denied = await quota(user, "mcp:generative-capabilities", limit=30)
+        if denied is not None:
+            return denied
+        try:
+            result = await client.capabilities(subject=user)
+            if not await audit(user, "generative", "capabilities", "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+            return result
+        except GenerativeError as exc:
+            await audit(user, "generative", "capabilities", "ERROR")
+            return {"status": "ERROR", "error_code": str(exc)}
+
+    @server.tool(name="generative_submit_job")
+    async def generative_submit_job(
+        stage: str, profile: str, prompt: str,
+        input_asset_ids: list[str] | None = None,
+        parameters: dict | None = None, confirm: bool = False,
+    ) -> dict:
+        """Submit a confirmed job: text-to-image, image-to-3D, 3D motion, or video."""
+        user = subject_provider()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if client is None or not client.settings.enabled:
+            return unavailable()
+        if not confirm:
+            return {"status": "CONFIRMATION_REQUIRED", "required": "confirm=true"}
+        denied = await quota(user, "mcp:generative-submit", limit=5)
+        if denied is not None:
+            return denied
+        if not await audit(user, "generative", "submit", "START"):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+        try:
+            result = await client.submit(
+                subject=user, stage=stage, profile=profile, prompt=prompt,
+                input_asset_ids=input_asset_ids or [], parameters=parameters or {},
+                confirm=confirm,
+            )
+            if not await audit(user, "generative", "submit", "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+            return result
+        except GenerativeError as exc:
+            await audit(user, "generative", "submit", "ERROR")
+            return {"status": "ERROR", "error_code": str(exc)}
+
+    @server.tool(name="generative_get_job")
+    async def generative_get_job(job_id: str) -> dict:
+        """Read a job owned by the authenticated subject; the worker enforces tenant scope."""
+        user = subject_provider()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if client is None or not client.settings.enabled:
+            return unavailable()
+        denied = await quota(user, "mcp:generative-job-status", limit=60)
+        if denied is not None:
+            return denied
+        try:
+            result = await client.get_job(subject=user, job_id=job_id)
+            if not await audit(user, "generative", "get_job", "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+            return result
+        except GenerativeError as exc:
+            await audit(user, "generative", "get_job", "ERROR")
+            return {"status": "ERROR", "error_code": str(exc)}
