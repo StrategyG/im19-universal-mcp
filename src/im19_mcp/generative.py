@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -119,10 +120,11 @@ class GenerativeClient:
     async def capabilities(self, *, subject: str) -> dict:
         data = await self._request("GET", "/v1/capabilities", subject=subject)
         stages = data.get("stages")
-        if not isinstance(stages, list):
+        if (not isinstance(stages, list) or len(stages) > len(STAGES)
+                or any(not isinstance(stage, str) or stage not in STAGES for stage in stages)
+                or len(set(stages)) != len(stages)):
             raise GenerativeError("WORKER_INVALID_RESPONSE")
-        safe = [s for s in stages if isinstance(s, str) and s in STAGES]
-        return {"status": "OK", "stages": safe, "profiles": list(self.settings.allowed_profiles)}
+        return {"status": "OK", "stages": stages, "profiles": list(self.settings.allowed_profiles)}
 
     async def submit(
         self, *, subject: str, stage: str, profile: str, prompt: str,
@@ -173,7 +175,7 @@ class GenerativeClient:
                 "note": "Accepted by the configured inference worker; completion is not implied."}
 
     async def get_job(self, *, subject: str, job_id: str) -> dict:
-        if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+        if not isinstance(job_id, str) or job_id in {".", ".."} or not _JOB_ID.fullmatch(job_id):
             return {"status": "INVALID_ARGUMENT", "reason": "invalid_job_id"}
         data = await self._request("GET", "/v1/jobs/" + job_id, subject=subject)
         state = data.get("status")
@@ -184,19 +186,35 @@ class GenerativeClient:
         if isinstance(stage, str) and stage in STAGES:
             result["stage"] = stage
         progress = data.get("progress")
-        if isinstance(progress, (int, float)) and 0 <= progress <= 1:
+        if progress is not None:
+            if type(progress) not in (int, float) or not math.isfinite(progress) or not 0 <= progress <= 1:
+                raise GenerativeError("WORKER_INVALID_RESPONSE")
             result["progress"] = progress
         assets = data.get("output_asset_ids", [])
-        if isinstance(assets, list) and len(assets) <= 16 and all(
-            isinstance(x, str) and _ASSET_ID.fullmatch(x) for x in assets
-        ):
-            result["output_asset_ids"] = assets
+        if (not isinstance(assets, list) or len(assets) > 16 or any(
+            not isinstance(asset_id, str) or not _ASSET_ID.fullmatch(asset_id)
+            for asset_id in assets
+        )):
+            raise GenerativeError("WORKER_INVALID_RESPONSE")
+        result["output_asset_ids"] = assets
         if state == "failed":
             error_code = data.get("error_code")
             if isinstance(error_code, str) and re.fullmatch(r"[A-Z0-9_]{1,64}", error_code):
                 result["error_code"] = error_code
         return result
 
+
+
+    async def cancel_job(self, *, subject: str, job_id: str) -> dict:
+        if not isinstance(job_id, str) or job_id in {".", ".."} or not _JOB_ID.fullmatch(job_id):
+            return {"status": "INVALID_ARGUMENT", "reason": "invalid_job_id"}
+        data = await self._request(
+            "POST", "/v1/jobs/" + job_id + "/cancel", subject=subject,
+        )
+        state = data.get("status")
+        if state not in {"cancelled", "cancel_requested", "succeeded", "failed"}:
+            raise GenerativeError("WORKER_INVALID_RESPONSE")
+        return {"status": state, "job_id": job_id}
 
 
 def register_generative_tools(
@@ -269,6 +287,30 @@ def register_generative_tools(
             return result
         except GenerativeError as exc:
             await audit(user, "generative", "submit", "ERROR")
+            return {"status": "ERROR", "error_code": str(exc)}
+
+    @server.tool(name="generative_cancel_job")
+    async def generative_cancel_job(job_id: str, confirm: bool = False) -> dict:
+        """Request cancellation of an owned generation job; requires explicit confirmation."""
+        user = subject_provider()
+        if not user:
+            return {"status": "AUTH_REQUIRED", "reason": "verified_mcp_identity_required"}
+        if client is None or not client.settings.enabled:
+            return unavailable()
+        if not confirm:
+            return {"status": "CONFIRMATION_REQUIRED", "required": "confirm=true"}
+        denied = await quota(user, "mcp:generative-cancel", limit=10)
+        if denied is not None:
+            return denied
+        if not await audit(user, "generative", "cancel_job", "START"):
+            return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+        try:
+            result = await client.cancel_job(subject=user, job_id=job_id)
+            if not await audit(user, "generative", "cancel_job", "SUCCESS"):
+                return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
+            return result
+        except GenerativeError as exc:
+            await audit(user, "generative", "cancel_job", "ERROR")
             return {"status": "ERROR", "error_code": str(exc)}
 
     @server.tool(name="generative_get_job")
