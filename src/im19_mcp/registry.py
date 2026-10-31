@@ -36,6 +36,10 @@ SERVICES: dict[str, Service] = {
     "x": Service("X", "x", (), (), False),
     "linkedin": Service("LinkedIn", "linkedin", (), (), False),
     "github": Service("GitHub", "github", (), (), False),
+    "generative": Service(
+        "IM19 Universal Generative AI", "self-hosted-worker", (),
+        ("generative_get_capabilities", "generative_submit_job", "generative_get_job"), True,
+    ),
     "cloudbrowser": Service(
         "Cloudbrowser A2A", "cloudbrowser", (),
         ("cloudbrowser_get_agent_card", "cloudbrowser_get_task", "cloudbrowser_get_task_summary",
