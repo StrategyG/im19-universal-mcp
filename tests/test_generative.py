@@ -17,7 +17,7 @@ async def test_generation_requires_explicit_confirmation():
     client = GenerativeClient(settings())
     result = await client.submit(
         subject="user-1", stage="text_to_image", profile="default",
-        prompt="A red cube", input_asset_ids=[], parameters={}, confirm=False,
+        prompt="A red cube", input_asset_ids=[], parameters={}, idempotency_key="request-key-000001", confirm=False,
     )
     assert result["status"] == "CONFIRMATION_REQUIRED"
 
@@ -27,7 +27,8 @@ async def test_rejects_unapproved_profile_before_network():
     client = GenerativeClient(settings())
     result = await client.submit(
         subject="user-1", stage="text_to_image", profile="untrusted",
-        prompt="A red cube", input_asset_ids=[], parameters={}, confirm=True,
+        prompt="A red cube", input_asset_ids=[], parameters={},
+        idempotency_key="request-key-000001", confirm=True,
     )
     assert result == {"status": "DENY", "reason": "profile_not_allowlisted"}
 
@@ -38,7 +39,7 @@ async def test_rejects_remote_asset_urls():
     result = await client.submit(
         subject="user-1", stage="image_to_3d", profile="default",
         prompt="Make a 3D asset", input_asset_ids=["https://evil.example/a.png"],
-        parameters={}, confirm=True,
+        parameters={}, idempotency_key="request-key-000001", confirm=True,
     )
     assert result["status"] == "INVALID_ARGUMENT"
 
@@ -49,6 +50,6 @@ async def test_rejects_unknown_parameters():
     result = await client.submit(
         subject="user-1", stage="render_video", profile="default",
         prompt="Animate", input_asset_ids=["asset_123"], parameters={"shell": "bad"},
-        confirm=True,
+        idempotency_key="request-key-000001", confirm=True,
     )
     assert result["status"] == "INVALID_ARGUMENT"
