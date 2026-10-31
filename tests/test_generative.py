@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from im19_mcp.generative import GenerativeClient, GenerativeSettings
+from im19_mcp.generative import GenerativeClient, GenerativeError, GenerativeSettings
 
 
 def settings():
@@ -99,7 +99,7 @@ async def test_rejects_malformed_worker_progress_and_asset_ids():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = GenerativeClient(settings(), http_client=http)
-        with pytest.raises(Exception, match="WORKER_INVALID_RESPONSE"):
+        with pytest.raises(GenerativeError, match="WORKER_INVALID_RESPONSE"):
             await client.get_job(subject="user-1", job_id="job_123")
 
 
