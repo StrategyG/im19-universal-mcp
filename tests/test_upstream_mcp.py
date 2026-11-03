@@ -296,7 +296,7 @@ async def test_dynamic_tool_is_registered_and_callable_on_real_mcp_server():
                 "github__search_repositories",
                 {"query": "mcp", "limit": 3},
             )
-            assert result.isError is False
+            assert result.is_error is False
         assert upstream.calls == [
             ("search_repositories", {"query": "mcp", "limit": 3})
         ]
