@@ -280,9 +280,43 @@ def _validate_schema_definition(schema: dict[str, Any], *, depth: int = 0) -> No
         not isinstance(enum, list)
         or not enum
         or len(enum) > 100
-        or any(not isinstance(item, (str, int, float, bool)) or item is None for item in enum)
+        or any(
+            not isinstance(item, (str, int, float, bool))
+            or item is None
+            or isinstance(item, float) and not math.isfinite(item)
+            for item in enum
+        )
     ):
         raise ConnectorConfigurationError("upstream_schema_enum_invalid")
+    for key in ("minimum", "maximum"):
+        value = schema.get(key)
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+        ):
+            raise ConnectorConfigurationError("upstream_schema_numeric_bound_invalid")
+    if (
+        schema.get("minimum") is not None
+        and schema.get("maximum") is not None
+        and schema["minimum"] > schema["maximum"]
+    ):
+        raise ConnectorConfigurationError("upstream_schema_numeric_bounds_inverted")
+    for key in ("minLength", "maxLength", "minItems", "maxItems"):
+        value = schema.get(key)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+        ):
+            raise ConnectorConfigurationError("upstream_schema_count_bound_invalid")
+    for minimum_key, maximum_key in (("minLength", "maxLength"), ("minItems", "maxItems")):
+        if (
+            schema.get(minimum_key) is not None
+            and schema.get(maximum_key) is not None
+            and schema[minimum_key] > schema[maximum_key]
+        ):
+            raise ConnectorConfigurationError("upstream_schema_count_bounds_inverted")
+    if kind == "array" and "items" in schema and not isinstance(schema["items"], dict):
+        raise ConnectorConfigurationError("upstream_schema_items_invalid")
     if kind == "object":
         properties = schema.get("properties", {})
         required = schema.get("required", [])
