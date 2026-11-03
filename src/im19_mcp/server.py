@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.types import ToolAnnotations
 from starlette.concurrency import run_in_threadpool
 
 from im19_mcp.config import Settings
@@ -117,12 +118,18 @@ def register_tools(
             "Do not infer live connectivity from registry metadata."
         )
 
-    @server.tool(name="list_available_services")
+    @server.tool(
+        name="list_available_services",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     def list_available_services() -> dict:
         """List known integrations. Listing a service never proves that it is connected."""
         return {"services": list_services(), "live_connection_claimed": False}
 
-    @server.tool(name="get_service_capabilities")
+    @server.tool(
+        name="get_service_capabilities",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     def get_service_capabilities(service: str) -> dict:
         """Return connector capabilities and scopes, including elevated read permissions."""
         selected = SERVICES.get(service)
@@ -149,7 +156,10 @@ def register_tools(
             )
         return response
 
-    @server.tool(name="get_connection_status")
+    @server.tool(
+        name="get_connection_status",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     @backend_guard
     def get_connection_status(service: str) -> dict:
         """Check only this authenticated user's provider connection; no token values."""
@@ -286,13 +296,19 @@ def register_tools(
             await audit(user, service, action, "ERROR")
             return {"status": "ERROR", "error_code": "UNEXPECTED_BACKEND_ERROR"}
 
-    @server.tool(name="youtube_get_channel")
+    @server.tool(
+        name="youtube_get_channel",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def youtube_get_channel() -> dict:
         """Read connected user's YouTube channel information and statistics."""
         return await execute("youtube_get_channel", "youtube", set(SCOPES["youtube"]),
                              lambda c: c.channel(), provider_factory)
 
-    @server.tool(name="youtube_list_videos")
+    @server.tool(
+        name="youtube_list_videos",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def youtube_list_videos(max_results: int = 25) -> dict:
         """Read up to 50 items from own uploads playlist; never publish."""
         if not 1 <= max_results <= 50:
@@ -300,13 +316,19 @@ def register_tools(
         return await execute("youtube_list_videos", "youtube", set(SCOPES["youtube"]),
                              lambda c: c.videos(max_results), provider_factory)
 
-    @server.tool(name="youtube_get_analytics")
+    @server.tool(
+        name="youtube_get_analytics",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def youtube_get_analytics(start_date: str, end_date: str) -> dict:
         """Read daily channel Analytics for an explicit ISO date range."""
         return await execute("youtube_get_analytics", "youtube", set(SCOPES["youtube_analytics"]),
                              lambda c: c.analytics(start_date, end_date), provider_factory)
 
-    @server.tool(name="drive_search_files")
+    @server.tool(
+        name="drive_search_files",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def drive_search_files(term: str, page_size: int = 25, page_token: str = "") -> dict:
         """Search own accessible Google Drive metadata by file name."""
         return await execute(
@@ -315,7 +337,10 @@ def register_tools(
             drive_factory,
         )
 
-    @server.tool(name="drive_list_folder")
+    @server.tool(
+        name="drive_list_folder",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def drive_list_folder(folder_id: str, page_size: int = 25,
                                 page_token: str = "") -> dict:
         """List only the immediate children of an authorized Drive folder."""
@@ -325,7 +350,10 @@ def register_tools(
             drive_factory,
         )
 
-    @server.tool(name="drive_get_metadata")
+    @server.tool(
+        name="drive_get_metadata",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def drive_get_metadata(file_id: str) -> dict:
         """Read basic file metadata without downloading its contents."""
         return await execute(
@@ -513,7 +541,10 @@ def register_tools(
             await audit(user, "cloudbrowser", action, "ERROR")
             return {"status": "SERVICE_UNAVAILABLE", "reason": "cloudbrowser_unavailable"}
 
-    @server.tool(name="cloudbrowser_get_agent_card")
+    @server.tool(
+        name="cloudbrowser_get_agent_card",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def cloudbrowser_get_agent_card() -> dict:
         """Read sanitized A2A orchestrator discovery; does not establish live readiness."""
         return await cloudbrowser_read("cloudbrowser_get_agent_card", lambda c: c.agent_card())
@@ -523,12 +554,18 @@ def register_tools(
         """Raw tasks can expose private messages and URLs; disabled by default in production."""
         return await cloudbrowser_read("cloudbrowser_get_task", lambda c: c.get_task(task_id))
 
-    @server.tool(name="cloudbrowser_get_task_summary")
+    @server.tool(
+        name="cloudbrowser_get_task_summary",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def cloudbrowser_get_task_summary(task_id: str) -> dict:
         """Structured workflow status (reviewed vs waiting/failed) without status prose."""
         return await cloudbrowser_read("cloudbrowser_get_task_summary", lambda c: c.task_summary(task_id))
 
-    @server.tool(name="cloudbrowser_list_task_summaries")
+    @server.tool(
+        name="cloudbrowser_list_task_summaries",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def cloudbrowser_list_task_summaries(page_size: int = 10, page_token: str = "") -> dict:
         """List reviewed / waiting / failed states without exposing private task prose."""
         return await cloudbrowser_read(
@@ -536,7 +573,10 @@ def register_tools(
             lambda c: c.list_task_summaries(page_size, page_token),
         )
 
-    @server.tool(name="cloudbrowser_get_readiness")
+    @server.tool(
+        name="cloudbrowser_get_readiness",
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
     async def cloudbrowser_get_readiness() -> dict:
         """Read Cloudbrowser operational database, worker and Telegram readiness checks."""
         return await cloudbrowser_read("cloudbrowser_get_readiness", lambda c: c.readiness())
