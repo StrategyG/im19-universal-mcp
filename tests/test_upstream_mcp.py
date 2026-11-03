@@ -267,8 +267,8 @@ async def test_dynamic_tool_is_registered_and_callable_on_real_mcp_server():
                 item for item in discovered.tools
                 if item.name == "github__search_repositories"
             )
-            assert tool.inputSchema["type"] == "object"
-            assert "query" in tool.inputSchema["properties"]
+            assert tool.input_schema["type"] == "object"
+            assert "query" in tool.input_schema["properties"]
             result = await client.call_tool(
                 "github__search_repositories",
                 {"query": "mcp", "limit": 3},
