@@ -94,4 +94,6 @@ def test_audit_preserves_caller_request_id_for_lifecycle_correlation(vault):
         rows = conn.execute(text(
             "select request_id, status from audit_events order by id"
         )).all()
-    assert rows == [(request_id, "STARTED"), (request_id, "SUCCEEDED")]
+    assert [(row[0], row[1]) for row in rows] == [
+        (request_id, "STARTED"), (request_id, "SUCCEEDED")
+    ]
