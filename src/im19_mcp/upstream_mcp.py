@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _CONNECTOR_ID = re.compile(r"^[a-z][a-z0-9_-]{1,47}$")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
-_TOOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
+_TOOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 _TENANT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_REF = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9._:/-]{1,240}$")
 _MAX_SCHEMA_BYTES = 64 * 1024
@@ -90,6 +90,13 @@ class ConnectorDefinition:
             raise ConnectorConfigurationError("connector_id_invalid")
         if not isinstance(self.secret_ref, str) or not _SECRET_REF.fullmatch(self.secret_ref):
             raise ConnectorConfigurationError("secret_manager_reference_required")
+        secret_segments = self.secret_ref.removeprefix("secret://").split("/")
+        if len(secret_segments) < 2 or any(
+            segment in {"", ".", ".."} for segment in secret_segments
+        ):
+            raise ConnectorConfigurationError("secret_manager_reference_invalid")
+        if not isinstance(self.enabled, bool):
+            raise ConnectorConfigurationError("connector_enabled_flag_invalid")
         if not isinstance(self.endpoint, str) or self.endpoint != self.endpoint.strip():
             raise ConnectorConfigurationError("endpoint_invalid")
         try:
@@ -689,6 +696,9 @@ class UpstreamMCPRouter:
             return {"status": "SERVICE_UNAVAILABLE", "reason": "quota_backend_unavailable"}
         if quota is False:
             return {"status": "RATE_LIMITED"}
+        if state.semaphore is None:
+            return {"status": "SERVICE_UNAVAILABLE",
+                    "reason": "connector_semaphore_unavailable"}
         request_id = str(uuid.uuid4())
         if not await self._audit(
             subject, connector_id, upstream_name, "STARTED", request_id,
@@ -696,10 +706,6 @@ class UpstreamMCPRouter:
             return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
         started = asyncio.get_running_loop().time()
         try:
-            if state.semaphore is None:
-                return {"status": "SERVICE_UNAVAILABLE",
-                        "reason": "connector_semaphore_unavailable",
-                        "request_id": request_id}
             async with state.semaphore:
                 result = await asyncio.wait_for(
                     state.session.call_tool(upstream_name, arguments=args),
@@ -754,6 +760,14 @@ class UpstreamMCPRouter:
                 "request_id": request_id,
                 "execution_may_have_completed": True,
             }
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(self._audit(
+                    subject, connector_id, upstream_name, "CANCELLED_UNCERTAIN", request_id,
+                ))
+            except Exception:
+                logger.warning("upstream_mcp_cancel_audit_failed")
+            raise
         except Exception:
             terminal = await self._audit(
                 subject, connector_id, upstream_name, "FAILED", request_id,
