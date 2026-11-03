@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import pytest
 from mcp.server import MCPServer
 
+from im19_mcp.gateway import create_gateway
+from im19_mcp.storage import Vault
 from im19_mcp.upstream_mcp import (
     ConnectorConfigurationError,
     ConnectorDefinition,
@@ -235,3 +237,18 @@ async def test_terminal_audit_failure_marks_execution_as_uncertain():
         assert result["status"] == "SERVICE_UNAVAILABLE"
         assert result["execution_may_have_completed"] is True
         assert len(upstream.calls) == 1
+
+
+def test_gateway_binds_optional_router_lifespan_and_runtime_governance(remote_cfg):
+    vault = Vault(
+        remote_cfg.database_url,
+        encryption_key=remote_cfg.vault_key,
+        audit_salt=remote_cfg.audit_salt,
+    )
+    router, _, _ = make_router()
+    server = create_gateway(remote_cfg, vault=vault, upstream_router=router)
+    assert server.settings.lifespan == router.lifespan
+    assert router._subject_resolver is not None
+    assert router._audit_writer is not None
+    assert router._quota_admission is not None
+    vault.engine.dispose()
