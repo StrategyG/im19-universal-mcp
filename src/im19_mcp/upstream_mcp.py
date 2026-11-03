@@ -587,10 +587,17 @@ class UpstreamMCPRouter:
                     if name not in connector.read_only_tools:
                         continue
                     annotations = _get(upstream_tool, "annotations", {}) or {}
-                    if (
-                        _get(annotations, "readOnlyHint", True) is False
-                        or _get(annotations, "destructiveHint", False) is True
-                    ):
+                    read_only_hint = _get(
+                        annotations,
+                        "readOnlyHint",
+                        _get(annotations, "read_only_hint", None),
+                    )
+                    destructive_hint = _get(
+                        annotations,
+                        "destructiveHint",
+                        _get(annotations, "destructive_hint", False),
+                    )
+                    if read_only_hint is not True or destructive_hint is True:
                         raise ConnectorConfigurationError("allowlisted_upstream_tool_not_read_only")
                     schema = _schema_for_tool(upstream_tool)
                     public_name = f"{connector.connector_id}__{name}"
