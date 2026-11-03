@@ -61,7 +61,8 @@ class TenantResolver(Protocol):
 
 class AuditWriter(Protocol):
     async def __call__(
-        self, subject: str, connector_id: str, tool_name: str, status: str
+        self, subject: str, connector_id: str, tool_name: str,
+        status: str, request_id: str,
     ) -> bool:
         """Durably write a redacted audit event; return False on any failure."""
 
@@ -689,7 +690,9 @@ class UpstreamMCPRouter:
         if quota is False:
             return {"status": "RATE_LIMITED"}
         request_id = str(uuid.uuid4())
-        if not await self._audit(subject, connector_id, upstream_name, "STARTED"):
+        if not await self._audit(
+            subject, connector_id, upstream_name, "STARTED", request_id,
+        ):
             return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
         started = asyncio.get_running_loop().time()
         try:
@@ -703,7 +706,9 @@ class UpstreamMCPRouter:
                     timeout=definition.timeout_seconds,
                 )
             if _get(result, "isError", _get(result, "is_error", False)):
-                terminal = await self._audit(subject, connector_id, upstream_name, "UPSTREAM_ERROR")
+                terminal = await self._audit(
+                    subject, connector_id, upstream_name, "UPSTREAM_ERROR", request_id,
+                )
                 return {
                     "status": "UPSTREAM_ERROR" if terminal else "SERVICE_UNAVAILABLE",
                     "request_id": request_id,
@@ -714,13 +719,17 @@ class UpstreamMCPRouter:
                 payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
             ).encode("utf-8")
             if len(encoded_result) > definition.max_result_bytes:
-                terminal = await self._audit(subject, connector_id, upstream_name, "RESULT_TOO_LARGE")
+                terminal = await self._audit(
+                    subject, connector_id, upstream_name, "RESULT_TOO_LARGE", request_id,
+                )
                 return {
                     "status": "RESULT_TOO_LARGE" if terminal else "SERVICE_UNAVAILABLE",
                     "request_id": request_id,
                     "execution_may_have_completed": True,
                 }
-            terminal = await self._audit(subject, connector_id, upstream_name, "SUCCEEDED")
+            terminal = await self._audit(
+                subject, connector_id, upstream_name, "SUCCEEDED", request_id,
+            )
             if not terminal:
                 return {
                     "status": "SERVICE_UNAVAILABLE",
@@ -737,14 +746,18 @@ class UpstreamMCPRouter:
                 "result": payload,
             }
         except asyncio.TimeoutError:
-            terminal = await self._audit(subject, connector_id, upstream_name, "TIMEOUT")
+            terminal = await self._audit(
+                subject, connector_id, upstream_name, "TIMEOUT", request_id,
+            )
             return {
                 "status": "UPSTREAM_TIMEOUT" if terminal else "SERVICE_UNAVAILABLE",
                 "request_id": request_id,
                 "execution_may_have_completed": True,
             }
         except Exception:
-            terminal = await self._audit(subject, connector_id, upstream_name, "FAILED")
+            terminal = await self._audit(
+                subject, connector_id, upstream_name, "FAILED", request_id,
+            )
             logger.warning("upstream_mcp_call_failed connector=%s tool=%s", connector_id, upstream_name)
             return {
                 "status": "UPSTREAM_ERROR" if terminal else "SERVICE_UNAVAILABLE",
@@ -753,12 +766,15 @@ class UpstreamMCPRouter:
             }
 
     async def _audit(
-        self, subject: str, connector_id: str, tool_name: str, status: str
+        self, subject: str, connector_id: str, tool_name: str,
+        status: str, request_id: str,
     ) -> bool:
         try:
             if self._audit_writer is None:
                 return False
-            return bool(await self._audit_writer(subject, connector_id, tool_name, status))
+            return bool(await self._audit_writer(
+                subject, connector_id, tool_name, status, request_id,
+            ))
         except Exception:
             logger.warning("upstream_mcp_audit_unavailable")
             return False
