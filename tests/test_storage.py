@@ -75,3 +75,23 @@ def test_expired_oauth_state_stays_consumed(vault):
     for _ in range(2):
         with pytest.raises(PermissionError):
             vault.consume_state("already-expired")
+
+
+
+def test_audit_preserves_caller_request_id_for_lifecycle_correlation(vault):
+    from sqlalchemy import text
+
+    request_id = "123e4567-e89b-12d3-a456-426614174000"
+    vault.audit(
+        "very_private_subject", "upstream:github",
+        "search_repositories", "STARTED", request_id=request_id,
+    )
+    vault.audit(
+        "very_private_subject", "upstream:github",
+        "search_repositories", "SUCCEEDED", request_id=request_id,
+    )
+    with vault.engine.connect() as conn:
+        rows = conn.execute(text(
+            "select request_id, status from audit_events order by id"
+        )).all()
+    assert rows == [(request_id, "STARTED"), (request_id, "SUCCEEDED")]
