@@ -18,6 +18,7 @@ UGAI remote MCP client
 ## Implemented in this change
 
 - Frozen connector definitions with validated connector IDs, fixed HTTPS endpoints, exact DNS host allowlists, secret-manager references, exact tenant allowlists, explicit read-only tool allowlists, bounded timeouts, result sizes and concurrency.
+- One connector is bound to exactly one tenant; deploy a distinct connector ID and secret reference for each tenant to prevent shared provider credentials crossing tenant boundaries. Tool schemas containing identity/tenant or credential arguments (for example `subject`, `tenant_id`, `user_id`, `access_token` or `api_key`) are rejected.
 - An immutable registry snapshot with deterministic per-connector and aggregate revisions.
 - An injected `SecretResolver` interface. Only the reference is kept in configuration; the resolved bearer token is used in the HTTP authorization header and never included in logs, tool schemas or results.
 - Upstream Streamable HTTP session initialization and bounded paginated `tools/list` discovery.
