@@ -229,19 +229,25 @@ class ConnectorDefinition:
 class ConnectorRegistry:
     """Immutable operator-provided connector snapshot with a stable revision."""
 
+    __slots__ = ("_connectors", "revision")
+
     def __init__(self, connectors: list[ConnectorDefinition] | tuple[ConnectorDefinition, ...]):
         values: dict[str, ConnectorDefinition] = {}
         for connector in connectors:
             if connector.connector_id in values:
                 raise ConnectorConfigurationError("duplicate_connector_id")
             values[connector.connector_id] = connector
-        self._connectors = MappingProxyType(values)
         revision_payload = {
             key: value.revision for key, value in sorted(values.items())
         }
-        self.revision = hashlib.sha256(
+        revision = hashlib.sha256(
             json.dumps(revision_payload, sort_keys=True).encode()
         ).hexdigest()
+        object.__setattr__(self, "_connectors", MappingProxyType(values))
+        object.__setattr__(self, "revision", revision)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("ConnectorRegistry snapshots are immutable")
 
     def get(self, connector_id: str) -> ConnectorDefinition | None:
         return self._connectors.get(connector_id)
