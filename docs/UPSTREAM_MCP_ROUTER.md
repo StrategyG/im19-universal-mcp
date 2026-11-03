@@ -26,6 +26,7 @@ UGAI remote MCP client
 - Tenant enforcement using a resolver over the verified IM19 subject. Model arguments cannot provide or override subject, tenant, connector endpoint or credentials.
 - Read-only enforcement: every exposed tool must be operator-allowlisted; upstream `readOnlyHint=false` or `destructiveHint=true` makes startup fail.
 - Per-connector semaphore, per-call timeout, bounded arguments/results, quota admission and mandatory STARTED/terminal audit records.
+- Staging and production fail closed when the distributed quota backend is unavailable; only isolated local development may omit it.
 - Pre-audit failure blocks upstream execution. Post-audit failure returns `execution_may_have_completed=true`; callers must reconcile and must not blindly retry.
 - Optional router lifecycle integration in `create_gateway()` and `create_app()`. Omitted router means no upstream connectors are loaded.
 
