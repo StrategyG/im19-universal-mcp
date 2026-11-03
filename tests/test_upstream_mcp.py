@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -303,3 +304,31 @@ async def test_dynamic_tool_is_registered_and_callable_on_real_mcp_server():
         assert [event[3] for event in events] == ["STARTED", "SUCCEEDED"]
     finally:
         await router.close()
+
+
+
+@pytest.mark.asyncio
+async def test_gateway_staging_requires_quota_backend(remote_cfg):
+    vault = Vault(
+        remote_cfg.database_url,
+        encryption_key=remote_cfg.vault_key,
+        audit_salt=remote_cfg.audit_salt,
+    )
+    router, _, _ = make_router()
+    create_gateway(remote_cfg, vault=vault, upstream_router=router)
+    assert await router._quota_admission("verified-subject", "github") is None
+    vault.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_development_may_omit_quota_backend(remote_cfg):
+    cfg = replace(remote_cfg, deployment_environment="development")
+    vault = Vault(
+        cfg.database_url,
+        encryption_key=cfg.vault_key,
+        audit_salt=cfg.audit_salt,
+    )
+    router, _, _ = make_router()
+    create_gateway(cfg, vault=vault, upstream_router=router)
+    assert await router._quota_admission("verified-subject", "github") is True
+    vault.engine.dispose()
