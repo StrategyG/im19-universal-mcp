@@ -17,10 +17,10 @@ import math
 import re
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, Mapping, Optional, Protocol
+from typing import Annotated, Any, Literal, Mapping, Protocol
 from urllib.parse import urlsplit
 
 from pydantic import Field
