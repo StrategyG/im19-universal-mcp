@@ -133,7 +133,23 @@ def test_connector_requires_fixed_https_host_secret_and_tenant():
     with pytest.raises(ConnectorConfigurationError):
         connector(secret_ref="synthetic-token")
     with pytest.raises(ConnectorConfigurationError):
+        connector(secret_ref="secret://production//github")
+    with pytest.raises(ConnectorConfigurationError):
+        connector(secret_ref="secret://production/../admin")
+    with pytest.raises(ConnectorConfigurationError):
         connector(tenant_allowlist=frozenset({"*"}))
+    with pytest.raises(ConnectorConfigurationError):
+        connector(enabled="true")
+
+
+def test_connector_deeply_freezes_mutable_operator_inputs():
+    tools = {"search_repositories"}
+    tenants = {"tenant-a"}
+    item = connector(read_only_tools=tools, tenant_allowlist=tenants)
+    tools.add("delete_repository")
+    tenants.add("tenant-b")
+    assert item.read_only_tools == frozenset({"search_repositories"})
+    assert item.tenant_allowlist == frozenset({"tenant-a"})
 
 
 def test_registry_is_immutable_and_revision_is_stable():
