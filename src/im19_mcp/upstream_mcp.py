@@ -28,6 +28,7 @@ from pydantic import Field
 logger = logging.getLogger(__name__)
 
 _CONNECTOR_ID = re.compile(r"^[a-z][a-z0-9_-]{1,47}$")
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TOOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
 _TENANT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_REF = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9._:/-]{1,240}$")
@@ -108,24 +109,39 @@ class ConnectorDefinition:
             or parsed.path in ("", "/")
         ):
             raise ConnectorConfigurationError("endpoint_must_be_fixed_https_mcp_url")
-        host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
         try:
+            host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
             ipaddress.ip_address(host)
         except ValueError:
             pass
+        except UnicodeError as exc:
+            raise ConnectorConfigurationError("endpoint_hostname_invalid") from exc
         else:
             raise ConnectorConfigurationError("ip_literal_upstream_forbidden")
         if (
             len(host) > 253
             or "." not in host
+            or any(not _DNS_LABEL.fullmatch(label) for label in host.split("."))
             or host.endswith((".localhost", ".local", ".internal", ".home"))
             or host in {"localhost", "metadata.google.internal"}
         ):
             raise ConnectorConfigurationError("upstream_hostname_not_public_dns")
-        normalized_hosts = frozenset(
-            item.encode("idna").decode("ascii").lower().rstrip(".")
-            for item in self.allowed_hosts
-        )
+        normalized_values: set[str] = set()
+        for item in self.allowed_hosts:
+            if not isinstance(item, str):
+                raise ConnectorConfigurationError("allowed_host_invalid")
+            try:
+                normalized = item.encode("idna").decode("ascii").lower().rstrip(".")
+            except UnicodeError as exc:
+                raise ConnectorConfigurationError("allowed_host_invalid") from exc
+            if (
+                len(normalized) > 253
+                or "." not in normalized
+                or any(not _DNS_LABEL.fullmatch(label) for label in normalized.split("."))
+            ):
+                raise ConnectorConfigurationError("allowed_host_invalid")
+            normalized_values.add(normalized)
+        normalized_hosts = frozenset(normalized_values)
         if not normalized_hosts or host not in normalized_hosts:
             raise ConnectorConfigurationError("endpoint_host_not_exactly_allowlisted")
         if any("*" in item or "/" in item or ":" in item for item in normalized_hosts):
@@ -232,6 +248,59 @@ def _plain(value: Any) -> Any:
     raise ValueError("upstream_result_not_json_serializable")
 
 
+def _validate_schema_definition(schema: dict[str, Any], *, depth: int = 0) -> None:
+    if depth > 12:
+        raise ConnectorConfigurationError("upstream_schema_depth_exceeded")
+    allowed_keys = {
+        "type", "title", "description", "properties", "required",
+        "additionalProperties", "items", "enum", "const", "default",
+        "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems",
+    }
+    if any(key not in allowed_keys for key in schema):
+        raise ConnectorConfigurationError("upstream_schema_keyword_not_supported")
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        non_null = [item for item in kind if item != "null"]
+        if len(non_null) != 1 or len(non_null) + 1 != len(kind):
+            raise ConnectorConfigurationError("upstream_schema_union_not_supported")
+        kind = non_null[0]
+    if kind not in {"object", "array", "string", "integer", "number", "boolean"}:
+        raise ConnectorConfigurationError("upstream_schema_type_not_supported")
+    enum = schema.get("enum")
+    if enum is not None and (
+        not isinstance(enum, list)
+        or not enum
+        or len(enum) > 100
+        or any(not isinstance(item, (str, int, float, bool)) or item is None for item in enum)
+    ):
+        raise ConnectorConfigurationError("upstream_schema_enum_invalid")
+    if kind == "object":
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        extra = schema.get("additionalProperties", True)
+        if not isinstance(properties, dict) or len(properties) > 64:
+            raise ConnectorConfigurationError("upstream_tool_properties_invalid")
+        if not isinstance(required, list) or any(
+            not isinstance(name, str) or name not in properties for name in required
+        ):
+            raise ConnectorConfigurationError("upstream_tool_required_invalid")
+        if not isinstance(extra, (bool, dict)):
+            raise ConnectorConfigurationError("upstream_schema_additional_properties_invalid")
+        for name, child in properties.items():
+            if (
+                not isinstance(name, str)
+                or not name.isidentifier()
+                or keyword.iskeyword(name)
+                or not isinstance(child, dict)
+            ):
+                raise ConnectorConfigurationError("upstream_tool_property_name_invalid")
+            _validate_schema_definition(child, depth=depth + 1)
+        if isinstance(extra, dict):
+            _validate_schema_definition(extra, depth=depth + 1)
+    if kind == "array" and isinstance(schema.get("items"), dict):
+        _validate_schema_definition(schema["items"], depth=depth + 1)
+
+
 def _schema_for_tool(tool: Any) -> dict[str, Any]:
     raw = _get(tool, "inputSchema", _get(tool, "input_schema", None))
     schema = _plain(raw) if raw is not None else None
@@ -239,23 +308,7 @@ def _schema_for_tool(tool: Any) -> dict[str, Any]:
         raise ConnectorConfigurationError("upstream_tool_schema_must_be_object")
     if len(json.dumps(schema, separators=(",", ":"), ensure_ascii=False).encode()) > _MAX_SCHEMA_BYTES:
         raise ConnectorConfigurationError("upstream_tool_schema_too_large")
-    properties = schema.get("properties", {})
-    required = schema.get("required", [])
-    if not isinstance(properties, dict) or len(properties) > 64:
-        raise ConnectorConfigurationError("upstream_tool_properties_invalid")
-    if not isinstance(required, list) or any(
-        not isinstance(name, str) or name not in properties for name in required
-    ):
-        raise ConnectorConfigurationError("upstream_tool_required_invalid")
-    for name, definition in properties.items():
-        if (
-            not isinstance(name, str)
-            or not name.isidentifier()
-            or keyword.iskeyword(name)
-            or not isinstance(definition, dict)
-        ):
-            raise ConnectorConfigurationError("upstream_tool_property_name_invalid")
-        _annotation_for_property(definition, required=name in required)
+    _validate_schema_definition(schema)
     return schema
 
 
