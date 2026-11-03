@@ -166,6 +166,10 @@ def test_registry_is_immutable_and_revision_is_stable():
     assert registry.get("github").revision == item.revision
     with pytest.raises(TypeError):
         registry._connectors["other"] = item
+    with pytest.raises(AttributeError, match="immutable"):
+        registry.revision = "rewritten"
+    with pytest.raises(AttributeError, match="immutable"):
+        registry._connectors = {}
     with pytest.raises(ConnectorConfigurationError):
         ConnectorRegistry([item, item])
 
