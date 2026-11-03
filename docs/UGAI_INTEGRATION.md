@@ -1,6 +1,6 @@
 # UGAI Integration Contract — IM19 Universal MCP
 
-Status: integration contract plus a reusable UGAI client adapter on branch `integration/im19-mcp-adapter-v1`; live connection remains unverified.
+Status: integration contract plus reusable UGAI client adapter on branch `integration/im19-mcp-adapter-v1`; live connection remains unverified.
 
 ## Repositories and ownership
 
@@ -27,8 +27,19 @@ The UGAI branch `integration/im19-mcp-adapter-v1` contains `src/ugai_mcp/`:
 - `config.py`: HTTPS endpoint, exact path, resource, timeout and response-size validation.
 - `auth.py`: injected `AccessTokenProvider` interface; concrete OAuth client is deployment-specific.
 - `client.py`: official MCP Python SDK Streamable HTTP session, initialize, dynamic tools/list and bounded tool calls.
-- `policy.py`: default deny; explicit allowlist, server read-only attestation and non-destructive annotation.
+- `policy.py`: default deny and operator-reviewed explicit allowlist. Optional server safety annotations can deny a tool if contradictory/destructive.
 - `tests/`: policy and configuration unit tests.
+
+### Tool policy compatibility
+
+The inspected IM19 0.3 `src/im19_mcp/server.py` registers tools without MCP read-only annotations. The UGAI adapter therefore does not require annotations for an explicitly allowlisted tool. The allowlist is empty by default and must be approved by an operator. If annotations are present, non-read-only or destructive hints deny the tool.
+
+Conservative initial allowlist candidates for review:
+- `list_available_services`, `get_service_capabilities`, `get_connection_status`
+- `youtube_get_channel`, `youtube_list_videos`, `youtube_get_analytics`
+- `drive_search_files`, `drive_list_folder`, `drive_get_metadata`
+
+Do not expose `drive_read_file` until restricted-scope consent and content-handling review pass. Exclude `drive_create_folder`, OAuth authorization/confirmation tools and raw Cloudbrowser task tools from the default agent allowlist.
 
 The adapter is not yet wired into a UGAI agent/workflow runtime. A redacted audit sink and live end-to-end staging evidence remain required.
 
