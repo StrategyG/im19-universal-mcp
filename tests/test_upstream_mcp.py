@@ -76,7 +76,7 @@ def make_tool(name="search_repositories", annotations=None, schema=None):
     return SimpleNamespace(
         name=name,
         description="Search approved repositories",
-        annotations=annotations or {},
+        annotations=({"readOnlyHint": True} if annotations is None else annotations),
         inputSchema=schema or {
             "type": "object",
             "properties": {
@@ -255,6 +255,27 @@ async def test_upstream_mutating_annotation_and_name_collision_fail_startup():
     with pytest.raises(ConnectorConfigurationError, match="not_read_only"):
         async with router.lifespan(ToolServer()):
             pass
+
+    destructive = make_tool(annotations={
+        "readOnlyHint": True,
+        "destructiveHint": True,
+    })
+    router, _, _ = make_router(session=FakeSession([destructive]))
+    with pytest.raises(ConnectorConfigurationError, match="not_read_only"):
+        async with router.lifespan(ToolServer()):
+            pass
+
+    missing = make_tool(annotations={})
+    router, _, _ = make_router(session=FakeSession([missing]))
+    with pytest.raises(ConnectorConfigurationError, match="not_read_only"):
+        async with router.lifespan(ToolServer()):
+            pass
+
+    snake_case = make_tool(annotations={"read_only_hint": True})
+    router, _, _ = make_router(session=FakeSession([snake_case]))
+    server = ToolServer()
+    async with router.lifespan(server):
+        assert "github__search_repositories" in server.handlers
 
     router, _, _ = make_router()
     with pytest.raises(ConnectorConfigurationError, match="collision"):
