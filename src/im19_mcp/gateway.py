@@ -124,12 +124,14 @@ def create_gateway(
     )
     if upstream_router is not None:
         async def upstream_audit(subject: str, connector_id: str,
-                                 tool_name: str, status: str) -> bool:
+                                 tool_name: str, status: str,
+                                 request_id: str) -> bool:
             if vault is None:
                 return False
             try:
                 await run_in_threadpool(
                     vault.audit, subject, f"upstream:{connector_id}", tool_name, status,
+                    request_id=request_id,
                 )
                 return True
             except Exception:
