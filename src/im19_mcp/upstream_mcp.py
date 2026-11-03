@@ -31,6 +31,11 @@ _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TOOL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 _TENANT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_REF = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9._:/-]{1,240}$")
+_RESERVED_ARGUMENT_KEYS = frozenset({
+    "sub", "subject", "actor_id", "principal", "tenant", "tenant_id",
+    "user_id", "account_id", "access_token", "refresh_token", "api_key",
+    "authorization", "credential", "credentials", "secret", "secret_ref",
+})
 _MAX_SCHEMA_BYTES = 64 * 1024
 _MAX_ARGUMENT_BYTES = 64 * 1024
 _MAX_TOOLS_PER_CONNECTOR = 128
@@ -171,13 +176,15 @@ class ConnectorDefinition:
         ):
             raise ConnectorConfigurationError("explicit_read_only_tool_allowlist_required")
         if (
-            not tenant_allowlist
+            len(tenant_allowlist) != 1
             or any(
                 not isinstance(x, str) or not _TENANT_ID.fullmatch(x) or x == "*"
                 for x in tenant_allowlist
             )
         ):
-            raise ConnectorConfigurationError("explicit_tenant_allowlist_required")
+            raise ConnectorConfigurationError(
+                "connector_must_be_scoped_to_exactly_one_tenant"
+            )
         if (
             not isinstance(self.timeout_seconds, (int, float))
             or isinstance(self.timeout_seconds, bool)
@@ -353,6 +360,8 @@ def _validate_schema_definition(schema: dict[str, Any], *, depth: int = 0) -> No
                 or not isinstance(child, dict)
             ):
                 raise ConnectorConfigurationError("upstream_tool_property_name_invalid")
+            if name.casefold() in _RESERVED_ARGUMENT_KEYS:
+                raise ConnectorConfigurationError("upstream_tool_identity_or_secret_argument_forbidden")
             _validate_schema_definition(child, depth=depth + 1)
         if isinstance(extra, dict):
             _validate_schema_definition(extra, depth=depth + 1)
