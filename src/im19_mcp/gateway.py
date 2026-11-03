@@ -35,7 +35,8 @@ from im19_mcp.governance.write_approval import WriteApprovalPortal, WRITE_COOKIE
 from im19_mcp.distributed_quota import DistributedQuota
 from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddleware
 from im19_mcp.readiness import database_ready
-from im19_mcp.server import register_tools
+from im19_mcp.server import register_tools, authenticated_subject
+from im19_mcp.upstream_mcp import UpstreamMCPRouter
 from im19_mcp.storage import Vault
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ class IntrospectionVerifier(TokenVerifier):
 
 def create_gateway(
     settings: Settings | None = None, *, quota: DistributedQuota | None = None,
-    vault: Vault | None = None,
+    vault: Vault | None = None, upstream_router: UpstreamMCPRouter | None = None,
 ) -> MCPServer:
     cfg = settings or Settings.from_env()
     cfg.require_remote()
@@ -114,12 +115,47 @@ def create_gateway(
             required_scopes=["im19:read"],
             validate_token_resource=True,
         ),
+        lifespan=upstream_router.lifespan if upstream_router is not None else None,
     )
     effective_quota = (
         quota if quota is not None else
         DistributedQuota(vault.engine, secret=cfg.audit_salt)
         if cfg.deployment_environment == "production" else None
     )
+    if upstream_router is not None:
+        async def upstream_audit(subject: str, connector_id: str,
+                                 tool_name: str, status: str) -> bool:
+            if vault is None:
+                return False
+            try:
+                await run_in_threadpool(
+                    vault.audit, subject, f"upstream:{connector_id}", tool_name, status,
+                )
+                return True
+            except Exception:
+                logger.warning("upstream_mcp_audit_unavailable")
+                return False
+
+        async def upstream_quota(subject: str, connector_id: str) -> bool | None:
+            if effective_quota is None:
+                return cfg.deployment_environment != "production"
+            try:
+                allowed, _retry_after = await run_in_threadpool(
+                    effective_quota.consume,
+                    f"mcp:upstream:{connector_id}", subject,
+                    limit=60, window_seconds=60,
+                )
+                return bool(allowed)
+            except Exception:
+                logger.warning("upstream_mcp_quota_unavailable")
+                return None
+
+        upstream_router.bind_runtime(
+            subject_resolver=authenticated_subject,
+            audit_writer=upstream_audit,
+            quota_admission=upstream_quota,
+        )
+
     register_tools(server, settings=cfg, vault=vault, oauth=oauth,
                    distributed_quota=effective_quota, browser_auth=browser,
                    write_approval_portal=write_portal)
@@ -298,7 +334,10 @@ def create_gateway(
     return server
 
 
-def create_app(settings: Settings | None = None):
+def create_app(
+    settings: Settings | None = None, *,
+    upstream_router: UpstreamMCPRouter | None = None,
+):
     cfg = settings or Settings.from_env()
     cfg.require_remote()
     resource = urlsplit(cfg.mcp_resource)
@@ -313,7 +352,9 @@ def create_app(settings: Settings | None = None):
                          secret=cfg.audit_salt)
         if cfg.deployment_environment == "production" else None
     )
-    app = create_gateway(cfg, quota=quota, vault=vault).streamable_http_app(
+    app = create_gateway(
+        cfg, quota=quota, vault=vault, upstream_router=upstream_router,
+    ).streamable_http_app(
         transport_security=TransportSecuritySettings(
             allowed_hosts=[host] + ([resource.hostname + ":443"] if resource.port is None else []),
             allowed_origins=[resource.scheme + "://" + host],
