@@ -18,7 +18,6 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Mapping, Protocol
 from urllib.parse import urlsplit
@@ -421,21 +420,35 @@ def _validate_schema_value(value: Any, schema: dict[str, Any], *, depth: int = 0
 
 @asynccontextmanager
 async def _default_session(connector: ConnectorDefinition, bearer_token: str):
+    import httpx2
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
 
-    timeout = timedelta(seconds=connector.timeout_seconds)
-    async with streamablehttp_client(
-        connector.endpoint,
+    timeout = httpx2.Timeout(
+        connector.timeout_seconds,
+        read=max(300.0, connector.timeout_seconds),
+    )
+    limits = httpx2.Limits(
+        max_connections=connector.max_concurrency + 2,
+        max_keepalive_connections=connector.max_concurrency,
+    )
+    # MCP SDK 2.x follows redirects only within the configured endpoint origin.
+    # An independently configured client keeps redirects disabled at HTTPX level.
+    async with httpx2.AsyncClient(
         headers={"Authorization": f"Bearer {bearer_token}"},
         timeout=timeout,
-        sse_read_timeout=timeout,
-    ) as (read_stream, write_stream, _):
-        async with ClientSession(read_stream, write_stream) as session:
-            await asyncio.wait_for(
-                session.initialize(), timeout=connector.timeout_seconds
-            )
-            yield session
+        limits=limits,
+        follow_redirects=False,
+    ) as http_client:
+        async with streamable_http_client(
+            connector.endpoint,
+            http_client=http_client,
+        ) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await asyncio.wait_for(
+                    session.initialize(), timeout=connector.timeout_seconds
+                )
+                yield session
 
 
 class UpstreamMCPRouter:
