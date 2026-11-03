@@ -111,11 +111,12 @@ class ConnectorDefinition:
             raise ConnectorConfigurationError("endpoint_must_be_fixed_https_mcp_url")
         try:
             host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+        except UnicodeError as exc:
+            raise ConnectorConfigurationError("endpoint_hostname_invalid") from exc
+        try:
             ipaddress.ip_address(host)
         except ValueError:
             pass
-        except UnicodeError as exc:
-            raise ConnectorConfigurationError("endpoint_hostname_invalid") from exc
         else:
             raise ConnectorConfigurationError("ip_literal_upstream_forbidden")
         if (
@@ -146,13 +147,20 @@ class ConnectorDefinition:
             raise ConnectorConfigurationError("endpoint_host_not_exactly_allowlisted")
         if any("*" in item or "/" in item or ":" in item for item in normalized_hosts):
             raise ConnectorConfigurationError("wildcard_or_non_dns_host_forbidden")
-        if not self.read_only_tools or len(self.read_only_tools) > _MAX_TOOLS_PER_CONNECTOR:
+        read_only_tools = frozenset(self.read_only_tools)
+        tenant_allowlist = frozenset(self.tenant_allowlist)
+        if (
+            not read_only_tools
+            or len(read_only_tools) > _MAX_TOOLS_PER_CONNECTOR
+            or any(not isinstance(x, str) or not _TOOL_NAME.fullmatch(x) for x in read_only_tools)
+        ):
             raise ConnectorConfigurationError("explicit_read_only_tool_allowlist_required")
-        if any(not isinstance(x, str) or not _TOOL_NAME.fullmatch(x) for x in self.read_only_tools):
-            raise ConnectorConfigurationError("tool_allowlist_invalid")
-        if not self.tenant_allowlist or any(
-            not isinstance(x, str) or not _TENANT_ID.fullmatch(x) or x == "*"
-            for x in self.tenant_allowlist
+        if (
+            not tenant_allowlist
+            or any(
+                not isinstance(x, str) or not _TENANT_ID.fullmatch(x) or x == "*"
+                for x in tenant_allowlist
+            )
         ):
             raise ConnectorConfigurationError("explicit_tenant_allowlist_required")
         if (
@@ -175,6 +183,8 @@ class ConnectorDefinition:
         ):
             raise ConnectorConfigurationError("concurrency_limit_out_of_range")
         object.__setattr__(self, "allowed_hosts", normalized_hosts)
+        object.__setattr__(self, "read_only_tools", read_only_tools)
+        object.__setattr__(self, "tenant_allowlist", tenant_allowlist)
 
     @property
     def revision(self) -> str:
@@ -636,7 +646,10 @@ class UpstreamMCPRouter:
             return {"status": "SERVICE_UNAVAILABLE", "reason": "audit_unavailable"}
         started = asyncio.get_running_loop().time()
         try:
-            assert state.semaphore is not None
+            if state.semaphore is None:
+                return {"status": "SERVICE_UNAVAILABLE",
+                        "reason": "connector_semaphore_unavailable",
+                        "request_id": request_id}
             async with state.semaphore:
                 result = await asyncio.wait_for(
                     state.session.call_tool(upstream_name, arguments=args),
@@ -696,7 +709,8 @@ class UpstreamMCPRouter:
         self, subject: str, connector_id: str, tool_name: str, status: str
     ) -> bool:
         try:
-            assert self._audit_writer is not None
+            if self._audit_writer is None:
+                return False
             return bool(await self._audit_writer(subject, connector_id, tool_name, status))
         except Exception:
             logger.warning("upstream_mcp_audit_unavailable")
