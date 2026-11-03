@@ -154,6 +154,14 @@ class ConnectorDefinition:
             raise ConnectorConfigurationError("endpoint_host_not_exactly_allowlisted")
         if any("*" in item or "/" in item or ":" in item for item in normalized_hosts):
             raise ConnectorConfigurationError("wildcard_or_non_dns_host_forbidden")
+        if isinstance(self.read_only_tools, (str, bytes)) or not isinstance(
+            self.read_only_tools, (set, frozenset, list, tuple)
+        ):
+            raise ConnectorConfigurationError("read_only_tool_allowlist_must_be_a_collection")
+        if isinstance(self.tenant_allowlist, (str, bytes)) or not isinstance(
+            self.tenant_allowlist, (set, frozenset, list, tuple)
+        ):
+            raise ConnectorConfigurationError("tenant_allowlist_must_be_a_collection")
         read_only_tools = frozenset(self.read_only_tools)
         tenant_allowlist = frozenset(self.tenant_allowlist)
         if (
@@ -485,6 +493,7 @@ async def _default_session(connector: ConnectorDefinition, bearer_token: str):
         async with streamable_http_client(
             connector.endpoint,
             http_client=http_client,
+            max_sse_event_size=connector.max_result_bytes,
         ) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await asyncio.wait_for(
