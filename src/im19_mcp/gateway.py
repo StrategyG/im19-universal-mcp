@@ -140,7 +140,9 @@ def create_gateway(
 
         async def upstream_quota(subject: str, connector_id: str) -> bool | None:
             if effective_quota is None:
-                return cfg.deployment_environment != "production"
+                # Only isolated local development may run without distributed quotas.
+                # Staging and production must prove quota backend availability.
+                return True if cfg.deployment_environment == "development" else None
             try:
                 allowed, _retry_after = await run_in_threadpool(
                     effective_quota.consume,
