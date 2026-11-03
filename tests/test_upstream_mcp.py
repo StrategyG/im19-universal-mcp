@@ -139,6 +139,8 @@ def test_connector_requires_fixed_https_host_secret_and_tenant():
         connector(secret_ref="secret://production/../admin")
     with pytest.raises(ConnectorConfigurationError):
         connector(tenant_allowlist=frozenset({"*"}))
+    with pytest.raises(ConnectorConfigurationError, match="exactly_one_tenant"):
+        connector(tenant_allowlist=frozenset({"tenant-a", "tenant-b"}))
     with pytest.raises(ConnectorConfigurationError):
         connector(enabled="true")
     with pytest.raises(ConnectorConfigurationError):
@@ -175,6 +177,12 @@ def test_schema_rejects_invalid_property_names_and_non_object_inputs():
         _schema_for_tool(make_tool(schema={
             "type": "object",
             "properties": {"bad-name": {"type": "string"}},
+        }))
+
+    with pytest.raises(ConnectorConfigurationError, match="identity_or_secret"):
+        _schema_for_tool(make_tool(schema={
+            "type": "object",
+            "properties": {"tenant_id": {"type": "string"}},
         }))
 
 
