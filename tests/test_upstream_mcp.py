@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from mcp import Client
+from mcp.server import MCPServer
 
 from im19_mcp.gateway import create_gateway
 from im19_mcp.storage import Vault
@@ -251,3 +253,30 @@ def test_gateway_binds_optional_router_lifespan_and_runtime_governance(remote_cf
     assert router._audit_writer is not None
     assert router._quota_admission is not None
     vault.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_is_registered_and_callable_on_real_mcp_server():
+    router, upstream, events = make_router()
+    server = MCPServer("upstream-router-test")
+    await router.start(server)
+    try:
+        async with Client(server) as client:
+            discovered = await client.list_tools()
+            tool = next(
+                item for item in discovered.tools
+                if item.name == "github__search_repositories"
+            )
+            assert tool.inputSchema["type"] == "object"
+            assert "query" in tool.inputSchema["properties"]
+            result = await client.call_tool(
+                "github__search_repositories",
+                {"query": "mcp", "limit": 3},
+            )
+            assert result.isError is False
+        assert upstream.calls == [
+            ("search_repositories", {"query": "mcp", "limit": 3})
+        ]
+        assert [event[3] for event in events] == ["STARTED", "SUCCEEDED"]
+    finally:
+        await router.close()
