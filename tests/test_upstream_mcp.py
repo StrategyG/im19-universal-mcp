@@ -100,9 +100,11 @@ def make_router(*, session=None, audit=None, tenant="tenant-a", quota=True, conn
         await session_factory(_connector, token)
         yield upstream
 
-    async def audit_writer(subject, connector_id, tool_name, status):
-        events.append((subject, connector_id, tool_name, status))
-        return True if audit is None else await audit(subject, connector_id, tool_name, status)
+    async def audit_writer(subject, connector_id, tool_name, status, request_id):
+        events.append((subject, connector_id, tool_name, status, request_id))
+        return True if audit is None else await audit(
+            subject, connector_id, tool_name, status, request_id,
+        )
 
     async def quota_admission(_subject, _connector):
         return quota
@@ -167,11 +169,12 @@ async def test_router_discovers_namespaced_tool_and_executes_through_verified_id
         assert result["connector"] == "github"
         assert upstream.calls == [("search_repositories", {"query": "mcp", "limit": 5})]
         assert [event[3] for event in events] == ["STARTED", "SUCCEEDED"]
+        assert events[0][4] == events[1][4]
 
 
 @pytest.mark.asyncio
 async def test_pre_audit_failure_blocks_upstream_call():
-    async def fail_start(_subject, _connector, _tool, status):
+    async def fail_start(_subject, _connector, _tool, status, _request_id):
         return status != "STARTED"
 
     router, upstream, _ = make_router(audit=fail_start)
@@ -228,7 +231,7 @@ async def test_upstream_mutating_annotation_and_name_collision_fail_startup():
 
 @pytest.mark.asyncio
 async def test_terminal_audit_failure_marks_execution_as_uncertain():
-    async def fail_terminal(_subject, _connector, _tool, status):
+    async def fail_terminal(_subject, _connector, _tool, status, _request_id):
         return status != "SUCCEEDED"
 
     router, upstream, _ = make_router(audit=fail_terminal)
