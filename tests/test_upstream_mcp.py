@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from mcp.server import MCPServer
 
 from im19_mcp.gateway import create_gateway
 from im19_mcp.storage import Vault
