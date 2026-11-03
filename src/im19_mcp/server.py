@@ -120,7 +120,7 @@ def register_tools(
 
     @server.tool(
         name="list_available_services",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     def list_available_services() -> dict:
         """List known integrations. Listing a service never proves that it is connected."""
@@ -128,7 +128,7 @@ def register_tools(
 
     @server.tool(
         name="get_service_capabilities",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     def get_service_capabilities(service: str) -> dict:
         """Return connector capabilities and scopes, including elevated read permissions."""
@@ -158,7 +158,7 @@ def register_tools(
 
     @server.tool(
         name="get_connection_status",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     @backend_guard
     def get_connection_status(service: str) -> dict:
@@ -298,7 +298,7 @@ def register_tools(
 
     @server.tool(
         name="youtube_get_channel",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def youtube_get_channel() -> dict:
         """Read connected user's YouTube channel information and statistics."""
@@ -307,7 +307,7 @@ def register_tools(
 
     @server.tool(
         name="youtube_list_videos",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def youtube_list_videos(max_results: int = 25) -> dict:
         """Read up to 50 items from own uploads playlist; never publish."""
@@ -318,7 +318,7 @@ def register_tools(
 
     @server.tool(
         name="youtube_get_analytics",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def youtube_get_analytics(start_date: str, end_date: str) -> dict:
         """Read daily channel Analytics for an explicit ISO date range."""
@@ -327,7 +327,7 @@ def register_tools(
 
     @server.tool(
         name="drive_search_files",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def drive_search_files(term: str, page_size: int = 25, page_token: str = "") -> dict:
         """Search own accessible Google Drive metadata by file name."""
@@ -339,7 +339,7 @@ def register_tools(
 
     @server.tool(
         name="drive_list_folder",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def drive_list_folder(folder_id: str, page_size: int = 25,
                                 page_token: str = "") -> dict:
@@ -352,7 +352,7 @@ def register_tools(
 
     @server.tool(
         name="drive_get_metadata",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def drive_get_metadata(file_id: str) -> dict:
         """Read basic file metadata without downloading its contents."""
@@ -543,7 +543,7 @@ def register_tools(
 
     @server.tool(
         name="cloudbrowser_get_agent_card",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def cloudbrowser_get_agent_card() -> dict:
         """Read sanitized A2A orchestrator discovery; does not establish live readiness."""
@@ -556,7 +556,7 @@ def register_tools(
 
     @server.tool(
         name="cloudbrowser_get_task_summary",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def cloudbrowser_get_task_summary(task_id: str) -> dict:
         """Structured workflow status (reviewed vs waiting/failed) without status prose."""
@@ -564,7 +564,7 @@ def register_tools(
 
     @server.tool(
         name="cloudbrowser_list_task_summaries",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def cloudbrowser_list_task_summaries(page_size: int = 10, page_token: str = "") -> dict:
         """List reviewed / waiting / failed states without exposing private task prose."""
@@ -575,7 +575,7 @@ def register_tools(
 
     @server.tool(
         name="cloudbrowser_get_readiness",
-        annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     async def cloudbrowser_get_readiness() -> dict:
         """Read Cloudbrowser operational database, worker and Telegram readiness checks."""
