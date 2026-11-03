@@ -140,6 +140,10 @@ def test_connector_requires_fixed_https_host_secret_and_tenant():
         connector(tenant_allowlist=frozenset({"*"}))
     with pytest.raises(ConnectorConfigurationError):
         connector(enabled="true")
+    with pytest.raises(ConnectorConfigurationError):
+        connector(read_only_tools="search_repositories")
+    with pytest.raises(ConnectorConfigurationError):
+        connector(tenant_allowlist="tenant-a")
 
 
 def test_connector_deeply_freezes_mutable_operator_inputs():
