@@ -214,7 +214,7 @@ jobs:
                   "read_access": "all_seven_repositories",
                   "write_access": repo == "Universal-Generative-AI",
                   "writable_path_classes": ["docs/operations/**","docs/architecture/**","schemas/**","contracts/**; exact paths must be named by task"],
-                  "acceptance": "Versioned contract source, owner matrix, compatibility fixtures and migration/deprecation policy; review contract impact in all consumers."
+                  "acceptance": "Versioned contract source, owner matrix, compatibility fixtures and migration/deprecation policy; review contract impact in all consumers. Breaking changes require approval by the Master Architect or named human owner; Agent 03 cannot self-approve."
               },
               {
                   "id": "04",
