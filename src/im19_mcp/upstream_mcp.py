@@ -502,6 +502,7 @@ async def _default_session(connector: ConnectorDefinition, bearer_token: str):
         timeout=timeout,
         limits=limits,
         follow_redirects=False,
+        trust_env=False,
     ) as http_client:
         async with streamable_http_client(
             connector.endpoint,
