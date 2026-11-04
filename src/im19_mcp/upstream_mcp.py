@@ -19,10 +19,9 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, Mapping, Protocol
+from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import urlsplit
 
-from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
