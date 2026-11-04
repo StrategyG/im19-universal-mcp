@@ -101,3 +101,46 @@ approval grants for Drive root-folder creation. Database schema revision
 `0006_write_approvals` and the exact browser redirect URI are required.
 Unit and simulated browser-route tests do not establish live account or
 ChatGPT write permission support. Production acceptance remains pending.
+
+
+## Re-audit baseline — 5 November 2026
+
+The current GitHub default-branch baseline was independently resolved as
+`bbfd46c2e6e3ae170f74f87e2a03431ae102e107`. PR #33, which adds the outbound
+MCP router core, is merged to `main`. It remains an optional injected runtime:
+the stock `im19-gateway` entry point does not instantiate an operator
+connector registry, a production SecretResolver, or an authoritative
+TenantResolver. No upstream MCP connector is configured or live-verified.
+
+The former production-hardening PR #21 is not safe to merge as-is: comparison
+against this baseline reports a diverged branch (15 commits ahead and 39 behind).
+Its bounded approval-body parsing, managed-PostgreSQL Compose path, and
+read-only deployment smoke command are being re-applied on a fresh branch
+based on the current `main`; no stale branch merge is authorized.
+
+Repository branch metadata reports `main.protected=false`; the rulesets
+collection is empty. The connected GitHub integration cannot read the branch
+protection details endpoint (HTTP 403), so no further protection configuration
+is claimed.
+
+### Current release blockers
+
+- Configure an independently reviewed branch ruleset and protected production
+  environment outside this code change.
+- Provision HTTPS ingress/WAF, managed PostgreSQL, KMS or approved secret
+  manager, OAuth issuer/client and test accounts.
+- Run real identity, Google consent/read, and ChatGPT MCP client acceptance.
+- Perform real backup/PITR restore and encryption-key recovery; capture agreed
+  RPO/RTO.
+- Complete operational alerting, cleanup scheduling, representative load,
+  adversarial egress/SSRF tests, penetration review, rollback rehearsal and
+  authorized sign-off.
+- For the outbound MCP router release, implement and inject production-grade
+  SecretResolver and TenantResolver adapters; connect at least one approved
+  non-production upstream MCP service; prove UGAI uses IM19 exclusively; retain
+  fail-closed behavior for audit/quota/tenant failures.
+
+This snapshot is an evidence record, not a production certification. Production
+remains NO-GO until all scope-specific gates in
+[RELEASE_GATES_2026.md](RELEASE_GATES_2026.md) are closed with redacted,
+time-stamped evidence.
