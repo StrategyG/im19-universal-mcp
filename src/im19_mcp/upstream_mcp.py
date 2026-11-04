@@ -662,9 +662,9 @@ class UpstreamMCPRouter:
             annotations[name] = annotation
             default = inspect.Parameter.empty
             if name not in required:
-                default = definition.get("default", None)
-                if isinstance(default, (dict, list)):
-                    default = None
+                # Upstream defaults are provider-controlled metadata. Do not
+                # let them pre-populate hidden or instruction-like arguments.
+                default = None
             parameters.append(inspect.Parameter(
                 name=name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
