@@ -88,7 +88,7 @@ cp .env.example .env
 # Set IM19_DATABASE_URL, IM19_FERNET_KEY, IM19_AUDIT_SALT,
 # Google OAuth credentials and a separate MCP OAuth identity provider.
 set -a; source .env; set +a
-alembic upgrade head  # required revisions 0001–0005
+alembic upgrade head  # current schema head: 0006_write_approvals
 im19-gateway
 ```
 
@@ -107,11 +107,15 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - `im19-purge-expired` is a trusted maintenance command for expiring unused OAuth states, encrypted pending confirmations, governance approval grants **and pseudonymized rate windows**; schedule it in backend operations, not through MCP.
 - Production gateway applies **PostgreSQL-backed shared quota admission** to ASGI socket peers (120/min), and limits verified MCP subjects before provider reads (60/min) or new Google OAuth consent (5/min). Failed quota DB access returns 503 / SERVICE_UNAVAILABLE; forwarding headers cannot choose a different quota identity. A trusted edge/WAF limiter is still required to distinguish end-user IPs behind reverse proxies.
 - Production remote configuration defaults to fail-closed: PostgreSQL is mandatory, development subjects are forbidden, and OAuth callback configuration and audit salt are validated. Explicitly set `IM19_DEPLOYMENT_ENV=staging` only for controlled staging environments.
-- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity, Alembic revision `0005_distributed_quotas`, and every required table/column pass. Container readiness uses this endpoint.
+- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity, Alembic revision `0006_write_approvals`, and every required table/column pass. Container readiness uses this endpoint.
 - Stateless JSON HTTP transport supports worker switching without per-process MCP session affinity. Host/Origin checks cover all routes. Upstream reads have byte limits and total deadlines; JSON rejects duplicate keys and non-finite values. PostgreSQL connections, statements, locks and pool waits are bounded.
 - Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**. A separate GitHub Actions job tests concurrent approval consumption, idempotency, **shared admission control across independent worker pools**, offline vault encryption key rotation, and a **synthetic encrypted backup/restore smoke test** on a disposable PostgreSQL 16 database. This is not a production disaster-recovery exercise.
+
+## Production deployment acceptance
+
+Use `compose.production.managed.yaml` only with an externally managed PostgreSQL service, a digest-pinned image, protected secret injection, and a trusted HTTPS/WAF ingress. It starts the gateway only; it does not provision identity, secrets, DNS, firewall rules, or managed database controls. See [production release gates](docs/RELEASE_GATES_2026.md). The read-only `im19-production-smoke` command verifies deployed HTTPS/MCP behavior but never certifies production by itself.
 
 ## Documentation
 
@@ -127,6 +131,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security checklist](docs/SECURITY_CHECKLIST.md)
 - [Acceptance report](docs/ACCEPTANCE_REPORT.md)
+- [Production release gates](docs/RELEASE_GATES_2026.md)
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
