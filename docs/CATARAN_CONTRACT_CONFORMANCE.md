@@ -2,10 +2,10 @@
 
 This repository pins the common event envelope only from UGAI's proposed Platform Contracts v1.
 
-- Upstream: StrategyG/Universal-Generative-AI PR #33 (Draft, not accepted or merged)
-- Upstream commit: `0a8c70daa6bfd32a90dfb6b734bdafe0b66a40ce`
-- Schema Git blob SHA-1: `b12c771430c56bd933de48b7c180e347e53db170`
-- Fixture Git blob SHA-1: `fcf9b50bed62fa27dfcad59dd04ddfc46fc52009`
+- Upstream: StrategyG/Universal-Generative-AI PR #34 (Draft, not accepted or merged)
+- Upstream commit: `a4b3311f752699db7c411989bcdc7025431d38fd`
+- Schema Git blob SHA-1: `5940df93b20712127123a351cb6fdc94649682ee`
+- Fixture Git blob SHA-1: `75f2b6e6a91536226e3e4f81c4a3dc382501e9e1`
 - Validator: `jsonschema==4.26.0`
 
 CI validates schema syntax, the golden fixture, invalid identifiers/versions, nested credential-like property-key rejection and trace context.
