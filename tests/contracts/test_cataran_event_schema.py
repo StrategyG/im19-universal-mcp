@@ -147,10 +147,17 @@ class PlatformEventSchemaTests(unittest.TestCase):
         }
         self.assert_valid(event)
 
-    def test_issuer_must_use_https(self) -> None:
-        event = copy.deepcopy(self.fixture)
-        event["principal"]["issuer"] = "http://identity.example.test/"
-        self.assert_invalid(event)
+    def test_issuer_must_be_https_without_userinfo_query_or_fragment(self) -> None:
+        for issuer in (
+            "http://identity.example.test/",
+            "https://user:pass@identity.example.test/",
+            "https://identity.example.test/?token=secret",
+            "https://identity.example.test/#fragment",
+        ):
+            with self.subTest(issuer=issuer):
+                event = copy.deepcopy(self.fixture)
+                event["principal"]["issuer"] = issuer
+                self.assert_invalid(event)
 
     def test_invalid_traceparent_is_rejected(self) -> None:
         event = copy.deepcopy(self.fixture)
