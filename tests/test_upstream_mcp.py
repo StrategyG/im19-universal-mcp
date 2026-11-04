@@ -425,3 +425,55 @@ async def test_upstream_tool_and_property_descriptions_are_not_exposed_to_model(
         import inspect
         parameter = inspect.signature(server.handlers["github__search_repositories"]).parameters["limit"]
         assert parameter.default is None
+
+
+@pytest.mark.asyncio
+async def test_default_upstream_transport_ignores_untrusted_proxy_environment(monkeypatch):
+    import httpx2
+    import mcp
+    import mcp.client.streamable_http as streamable_module
+
+    from contextlib import asynccontextmanager
+    from im19_mcp.upstream_mcp import _default_session
+
+    captured = {}
+
+    class FakeHTTPClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeSession:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def initialize(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_streamable_http_client(endpoint, **kwargs):
+        captured["endpoint"] = endpoint
+        captured["streamable_kwargs"] = kwargs
+        yield object(), object()
+
+    monkeypatch.setattr(httpx2, "AsyncClient", FakeHTTPClient)
+    monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+    monkeypatch.setattr(streamable_module, "streamable_http_client", fake_streamable_http_client)
+
+    async with _default_session(connector(), "synthetic-short-lived-token"):
+        pass
+
+    assert captured["trust_env"] is False
+    assert captured["follow_redirects"] is False
+    assert captured["endpoint"] == connector().endpoint
