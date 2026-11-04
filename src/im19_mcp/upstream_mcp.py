@@ -780,6 +780,7 @@ class UpstreamMCPRouter:
                 "tool": upstream_name,
                 "request_id": request_id,
                 "duration_ms": max(0, int((asyncio.get_running_loop().time() - started) * 1000)),
+                "result_classification": "UNTRUSTED_EXTERNAL_DATA",
                 "result": payload,
             }
         except asyncio.TimeoutError:
