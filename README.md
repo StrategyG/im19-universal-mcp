@@ -88,7 +88,7 @@ cp .env.example .env
 # Set IM19_DATABASE_URL, IM19_FERNET_KEY, IM19_AUDIT_SALT,
 # Google OAuth credentials and a separate MCP OAuth identity provider.
 set -a; source .env; set +a
-alembic upgrade head  # current schema head: 0006_write_approvals
+alembic upgrade head  # current schema head: 0007_upstream_tenant_bindings
 im19-gateway
 ```
 
@@ -107,7 +107,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - `im19-purge-expired` is a trusted maintenance command for expiring unused OAuth states, encrypted pending confirmations, governance approval grants **and pseudonymized rate windows**; schedule it in backend operations, not through MCP.
 - Production gateway applies **PostgreSQL-backed shared quota admission** to ASGI socket peers (120/min), and limits verified MCP subjects before provider reads (60/min) or new Google OAuth consent (5/min). Failed quota DB access returns 503 / SERVICE_UNAVAILABLE; forwarding headers cannot choose a different quota identity. A trusted edge/WAF limiter is still required to distinguish end-user IPs behind reverse proxies.
 - Production remote configuration defaults to fail-closed: PostgreSQL is mandatory, development subjects are forbidden, and OAuth callback configuration and audit salt are validated. Explicitly set `IM19_DEPLOYMENT_ENV=staging` only for controlled staging environments.
-- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity, Alembic revision `0006_write_approvals`, and every required table/column pass. Container readiness uses this endpoint.
+- `/health` indicates that the process is alive; `/ready` returns HTTP 503 unless database connectivity, Alembic revision `0007_upstream_tenant_bindings`, and every required table/column pass. Container readiness uses this endpoint.
 - Stateless JSON HTTP transport supports worker switching without per-process MCP session affinity. Host/Origin checks cover all routes. Upstream reads have byte limits and total deadlines; JSON rejects duplicate keys and non-finite values. PostgreSQL connections, statements, locks and pool waits are bounded.
 - Drive file content is never fetched with a metadata-only grant. **Both** `drive.metadata.readonly` and `drive.readonly` are Google restricted scopes; public use requires appropriate verification, with security assessment obligations depending on handling of the data.
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
