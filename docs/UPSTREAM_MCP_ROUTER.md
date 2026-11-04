@@ -29,6 +29,7 @@ UGAI remote MCP client
 - Per-connector semaphore, per-call timeout, bounded arguments/results, quota admission and mandatory STARTED/terminal audit records.
 - Staging and production fail closed when the distributed quota backend is unavailable; only isolated local development may omit it.
 - Pre-audit failure blocks upstream execution. Post-audit failure returns `execution_may_have_completed=true`; callers must reconcile and must not blindly retry.
+- Successful upstream payloads carry `result_classification=UNTRUSTED_EXTERNAL_DATA`. Preserve this label through UGAI task state and user-visible provenance; external text is data, never executable instruction. UGAI must enforce this boundary in its own orchestration/prompt policy.
 - Optional router lifecycle integration in `create_gateway()` and `create_app()`. Omitted router means no upstream connectors are loaded.
 
 ## Deployment composition
