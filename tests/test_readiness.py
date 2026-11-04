@@ -20,6 +20,18 @@ def test_schema_revision_must_be_exact(tmp_path):
         conn.execute(text("UPDATE alembic_version SET version_num='0007_upstream_tenant_bindings'"))
     assert database_ready(engine) is False  # a marker without tables is insufficient
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE mcp_subject_tenant_bindings (
+                    subject VARCHAR(255) PRIMARY KEY,
+                    tenant_id VARCHAR(128) NOT NULL,
+                    status VARCHAR(16) NOT NULL
+                )
+                """
+            )
+        )
     assert database_ready(engine) is True
     assert database_ready(engine, "unexpected-version") is False
     with engine.begin() as conn:
