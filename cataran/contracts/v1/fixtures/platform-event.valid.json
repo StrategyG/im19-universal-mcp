@@ -1,0 +1,33 @@
+{
+  "contract_version": "1.0.0",
+  "message_id": "019a8000-0000-7000-8000-000000000001",
+  "message_type": "task.state_changed",
+  "occurred_at": "2026-11-05T00:00:00Z",
+  "tenant_id": "019a8000-0000-7000-8000-000000000002",
+  "project_id": "019a8000-0000-7000-8000-000000000003",
+  "principal": {
+    "issuer": "https://identity.example.test/",
+    "subject": "subject-opaque-001",
+    "principal_id": "principal-001"
+  },
+  "service_actor": {
+    "service": "ugai-orchestrator",
+    "identity": "spiffe://cataran/ugai"
+  },
+  "task_id": "019a8000-0000-7000-8000-000000000004",
+  "correlation_id": "019a8000-0000-7000-8000-000000000005",
+  "causation_id": null,
+  "sequence": 1,
+  "producer": {
+    "service": "ugai",
+    "version": "0.1.0"
+  },
+  "trace_context": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  },
+  "payload": {
+    "from_state": "queued",
+    "to_state": "running",
+    "reason": "worker_claimed"
+  }
+}
