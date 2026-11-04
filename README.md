@@ -88,7 +88,7 @@ cp .env.example .env
 # Set IM19_DATABASE_URL, IM19_FERNET_KEY, IM19_AUDIT_SALT,
 # Google OAuth credentials and a separate MCP OAuth identity provider.
 set -a; source .env; set +a
-alembic upgrade head  # required revisions 0001–0005
+alembic upgrade head  # current schema head: 0006_write_approvals
 im19-gateway
 ```
 
@@ -113,6 +113,10 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - A real independent OAuth identity provider is required for ChatGPT-to-MCP authentication.
 - CI uses mock provider responses, **not live Google API credentials**. A separate GitHub Actions job tests concurrent approval consumption, idempotency, **shared admission control across independent worker pools**, offline vault encryption key rotation, and a **synthetic encrypted backup/restore smoke test** on a disposable PostgreSQL 16 database. This is not a production disaster-recovery exercise.
 
+## Production deployment acceptance
+
+Use `compose.production.managed.yaml` only with an externally managed PostgreSQL service, a digest-pinned image, protected secret injection, and a trusted HTTPS/WAF ingress. It starts the gateway only; it does not provision identity, secrets, DNS, firewall rules, or managed database controls. See [production release gates](docs/RELEASE_GATES_2026.md). The read-only `im19-production-smoke` command verifies deployed HTTPS/MCP behavior but never certifies production by itself.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
@@ -127,6 +131,7 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security checklist](docs/SECURITY_CHECKLIST.md)
 - [Acceptance report](docs/ACCEPTANCE_REPORT.md)
+- [Production release gates](docs/RELEASE_GATES_2026.md)
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
