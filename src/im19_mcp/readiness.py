@@ -27,6 +27,14 @@ def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVI
             # A revision marker alone cannot prove tables/columns are usable.
             for table in Base.metadata.sorted_tables:
                 connection.execute(select(table).limit(0))
+            # The upstream tenant directory is an Alembic-managed table that
+            # is intentionally not part of the provider credential ORM metadata.
+            connection.execute(
+                text(
+                    "SELECT subject, tenant_id, status "
+                    "FROM mcp_subject_tenant_bindings LIMIT 0"
+                )
+            )
             return True
     except (SQLAlchemyError, OSError, ValueError):
         return False
