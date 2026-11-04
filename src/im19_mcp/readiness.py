@@ -7,7 +7,7 @@ from __future__ import annotations
 from sqlalchemy import Engine, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
-REQUIRED_SCHEMA_REVISION = "0006_write_approvals"
+REQUIRED_SCHEMA_REVISION = "0007_upstream_tenant_bindings"
 
 
 def database_ready(engine: Engine, required_revision: str = REQUIRED_SCHEMA_REVISION) -> bool:
