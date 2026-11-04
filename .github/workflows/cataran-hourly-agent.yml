@@ -174,16 +174,131 @@ jobs:
               raise SystemExit("CATARAN_AGENT_DISPATCH_URL must be a valid HTTPS URL without embedded credentials or fragment.")
 
           snapshot = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          agents = [{"id":"01","role":"independent_production_auditor","access":"read_only"}]
-          agents += [{"id":f"{i:02d}","role":"engineering_remediation","access":"read_write_via_branch_and_pull_request"} for i in range(2,10)]
-          payload = {
+          repo = os.environ["REPOSITORY"]
+          role_map = [
+              {
+                  "id": "01",
+                  "role": "independent_production_auditor",
+                  "authority": "independent_audit_only",
+                  "read_access": "all_seven_repositories",
+                  "write_access": False,
+                  "primary_repositories": ["RAG_Cerdas","android-ai-universal-connector","im19-universal-mcp","Cloudbrowser","Universal-Generative-AI","REVORA_IDE","ai-notebook-studio-v"],
+                  "acceptance": "Independently verify exact-SHA evidence, score 0-100, list failed mandatory gates; cannot approve own work."
+              },
+              {
+                  "id": "02",
+                  "role": "UGAI_principal_AI_engineer",
+                  "authority": "reasoning_model_routing_decision_runtime_workflow_orchestration",
+                  "primary_repositories": ["Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "Universal-Generative-AI",
+                  "writable_path_classes": ["UGAI reasoning/provider/runtime/workflow source and tests explicitly named in one task"],
+                  "acceptance": "Reasoning and decision pipeline tests, provider fallback and safety tests, workflow state/idempotency evidence."
+              },
+              {
+                  "id": "03",
+                  "role": "architecture_governance_principal",
+                  "authority": "canonical_contracts_ADRs_component_ownership_compatibility_policy",
+                  "primary_repositories": ["Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "Universal-Generative-AI",
+                  "writable_path_classes": ["docs/operations/**","docs/architecture/**","schemas/**","contracts/**; exact paths must be named by task"],
+                  "acceptance": "Versioned contract source, owner matrix, compatibility fixtures and migration/deprecation policy; review contract impact in all consumers."
+              },
+              {
+                  "id": "04",
+                  "role": "AI_Notebook_principal_engineer",
+                  "authority": "user_application_frontend_API_workspace_notebook_execution_boundary",
+                  "primary_repositories": ["ai-notebook-studio-v"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "ai-notebook-studio-v",
+                  "writable_path_classes": ["Notebook client/API/UI/workspace/execution code and tests explicitly named in one task"],
+                  "acceptance": "Verified identity and tenant authorization, UI/WebView asset integrity, durable task client, isolated execution and negative tenant tests."
+              },
+              {
+                  "id": "05",
+                  "role": "database_knowledge_principal_engineer",
+                  "authority": "database_schema_migrations_RAG_ingestion_retrieval_evaluation_backup_restore",
+                  "primary_repositories": ["RAG_Cerdas","Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": ["RAG_Cerdas","Universal-Generative-AI"].includes(repo),
+                  "writable_path_classes": ["RAG ingestion/retrieval/evaluation, approved database adapters, migrations and data tests explicitly named in one task"],
+                  "acceptance": "Migration forward/rollback, tenant/RLS/integrity tests, provenance and reviewed qrels; no invented labels or production writes."
+              },
+              {
+                  "id": "06",
+                  "role": "software_engineering_principal",
+                  "authority": "assigned_implementation_debugging_refactoring_quality_performance",
+                  "primary_repositories": ["task_assigned_repository_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["Only the exact repository/path allowlist and task branch recorded in the assigned GitHub issue; no default-branch writes"],
+                  "acceptance": "Reproducible defect, minimal scoped fix, tests, no regressions, exact-SHA evidence and review."
+              },
+              {
+                  "id": "07",
+                  "role": "devops_infrastructure_principal",
+                  "authority": "CI_CD_workflows_containers_deployment_manifests_observability_runbooks",
+                  "primary_repositories": ["all_seven_repositories_in_infrastructure_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": [".github/workflows/**","Docker/Compose/infrastructure manifests, monitoring and runbooks only when listed in the task"],
+                  "acceptance": "Reproducible CI, least privilege, secret isolation, rollback and monitoring evidence; no secret/ruleset/environment administration or production deployment."
+              },
+              {
+                  "id": "08",
+                  "role": "QA_security_reliability_principal",
+                  "authority": "test_strategy_security_checks_regression_reliability_remediation",
+                  "primary_repositories": ["all_seven_repositories_in_test_and_security_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["tests/**","security test harnesses and scanning configuration explicitly listed in the task; remediation source only if separately assigned"],
+                  "acceptance": "Test counts and outcomes, threat/negative tests, no self-approval, no destructive live tests or risk acceptance."
+              },
+              {
+                  "id": "09",
+                  "role": "system_integration_optimization_principal",
+                  "authority": "cross_repository_adapters_contract_compatibility_E2E_performance",
+                  "primary_repositories": ["all_seven_repositories_in_integration_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["adapters/**","integration/**","contract compatibility and E2E fixtures explicitly listed in the task"],
+                  "acceptance": "Cross-repo contract compatibility, tenant/correlation integrity, negative end-to-end cases and measured performance."
+              }
+          ]
+          assignments = []
+          for agent in role_map:
+              assignments.append({
+                  **agent,
+                  "eligible_for_task": agent["id"] == "01" or agent["write_access"] is True,
+                  "task_owner_required": agent["id"] != "01",
+                  "single_writer_enforced": True,
+                  "task_path_allowlist_required": agent["id"] != "01"
+              })
+          agents = assignments
+          utc_hour = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y%m%dT%H")
+                    payload = {
               "schema_version": "cataran.agent-dispatch.v1",
-              "trigger": {"type": os.environ["EVENT_NAME"], "scheduled_cadence": "hourly"},
+              "trigger": {"type": os.environ["EVENT_NAME"], "scheduled_cadence": "hourly", "utc_hour_key": utc_hour},
+              "organization_idempotency_key": "cataran:" + utc_hour,
+              "policy_version": "cataran-agent-operating-model.v1",
               "repository": os.environ["REPOSITORY"],
               "default_branch": os.environ["DEFAULT_BRANCH"],
               "observed_commit_sha": os.environ["COMMIT_SHA"],
               "run": {"id": os.environ["RUN_ID"], "attempt": os.environ["RUN_ATTEMPT"], "url": os.environ["RUN_URL"]},
               "agents": agents,
+              "repository_scope": {
+                  "current_repository": repo,
+                  "only_agents_with_write_access_may_receive_implementation_tasks": True,
+                  "read_access_does_not_imply_write_ownership": True,
+                  "task_must_name_one_owner_and_exact_paths": True
+              },
+              "task_checkpoint": {
+                  "checkpoint_cadence": "hourly",
+                  "checkpoint_is_not_a_task_deadline": True,
+                  "resume_unfinished_from_durable_task_record": True,
+                  "assign_next_unblocked_task_only_after_acceptance": True
+              },
               "requested_mode": "audit_prioritize_remediate_reverify",
               "stop_condition": "Stop only when Agent 01 independently verifies a 90-100/100 production-readiness score and every mandatory P0/security/recovery/release gate passes.",
               "continuation_policy": "Carry unfinished work forward; assign the next highest-priority unblocked task to a completed worker; never mark work complete without exact-SHA evidence.",
