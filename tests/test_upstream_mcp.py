@@ -425,3 +425,19 @@ async def test_upstream_tool_and_property_descriptions_are_not_exposed_to_model(
         import inspect
         parameter = inspect.signature(server.handlers["github__search_repositories"]).parameters["limit"]
         assert parameter.default is None
+
+@pytest.mark.asyncio
+async def test_router_supports_async_authoritative_tenant_resolver():
+    router, upstream, _events = make_router()
+
+    async def resolve_tenant(subject):
+        assert subject == "verified-subject"
+        return "tenant-a"
+
+    router._tenant_for_subject = resolve_tenant
+    server = ToolServer()
+    async with router.lifespan(server):
+        result = await server.handlers["github__search_repositories"](query="async tenant")
+    assert result["status"] == "OK"
+    assert upstream.calls == [("search_repositories", {"query": "async tenant"})]
+
