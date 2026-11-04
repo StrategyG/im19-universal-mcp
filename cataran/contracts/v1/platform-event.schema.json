@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cataran.strategy-g/contracts/v1/platform-event.schema.json",
+  "$id": "https://cataran.invalid/contracts/v1/platform-event-envelope.schema.json",
   "title": "Cataran Platform Event Envelope v1",
   "type": "object",
   "additionalProperties": false,
@@ -100,7 +100,7 @@
           "type": "string",
           "format": "uri",
           "minLength": 1,
-          "pattern": "^https://[^?#]+$"
+          "pattern": "^https://[^/@?#]+(?:/[^?#]*)?$"
         },
         "subject": {
           "type": "string",
