@@ -43,7 +43,58 @@ A deployment must explicitly construct the registry and provide organization-spe
 
 Then inject the router into `create_app(settings, upstream_router=router)`. Do not put connector endpoints, credentials, headers, or transport settings in LLM tool arguments. Do not expose an arbitrary registration tool to the model.
 
-The current `im19-gateway` command does not auto-load a cloud-specific secret manager or tenant directory. The code deliberately does not guess these provider-specific integrations. Until a deployment entrypoint supplies them, upstream routing stays off. A staging composition should be built and tested with the real identity provider and secret manager before any production rollout.
+### Built-in bounded deployment adapter
+
+A fail-closed operator composition is available through these deployment-only settings:
+
+- `IM19_UPSTREAM_CONNECTORS_JSON`: JSON list of immutable connector definitions. It contains endpoint/host allowlists, exact read-only tool names, tenant allowlist, `enabled`, and a `secret_ref`; it must never contain a token or credential.
+- `IM19_UPSTREAM_TENANT_MAP_JSON`: exact JSON object mapping an already introspected IM19 subject to one tenant identifier. Wildcards and unknown subjects are denied.
+- `IM19_UPSTREAM_SECRET_ROOT`: read-only mounted secret directory; default `/run/secrets/im19/upstream`.
+
+Example shape (synthetic values only):
+
+```json
+[
+  {
+    "connector_id": "github",
+    "endpoint": "https://mcp.github.example/mcp",
+    "allowed_hosts": ["mcp.github.example"],
+    "secret_ref": "secret://production/github/mcp-token",
+    "read_only_tools": ["search_repositories"],
+    "tenant_allowlist": ["tenant-a"],
+    "enabled": false
+  }
+]
+```
+
+```json
+{
+  "verified-oidc-subject-123": "tenant-a"
+}
+```
+
+The secret resolver reads `secret://production/github/mcp-token` from
+`/run/secrets/im19/upstream/production/github/mcp-token`. It refuses path traversal,
+symlinks, non-regular files, over-sized secret files and group/world-writable secret files.
+Mount the directory read-only from the platform secret manager; do not copy secret bytes
+into the environment, connector JSON, image or repository.
+
+If both JSON documents are absent, the upstream router remains disabled. If only one is
+present, malformed JSON, duplicate keys, unrecognized connector fields, invalid tenant
+mappings or an unavailable secret root are detected before the gateway starts. An explicit
+injected `upstream_router` remains supported for deployment-specific composition.
+
+**Deployment maturity boundary:** this built-in exact subject map is a bounded bootstrap
+adapter for isolated staging or a small operator-managed deployment. It is static and
+requires a reviewed redeploy to change membership; it is not a substitute for a live
+revocation-aware institutional tenant directory. Production activation still requires
+a production secret manager mount, real identity-provider subject inventory, dynamic
+tenant/membership lifecycle, network egress enforcement, and end-to-end staging evidence.
+The built-in adapter does not activate any connector by default.
+
+The current `im19-gateway` command does not auto-load a cloud-specific secret manager or
+live tenant directory. Until the operator supplies and validates those deployment
+dependencies, upstream routing stays off.
 
 ## Required network controls
 
