@@ -37,6 +37,7 @@ from im19_mcp.rate_limit import DistributedRateLimitMiddleware, RateLimitMiddlew
 from im19_mcp.readiness import database_ready
 from im19_mcp.server import register_tools, authenticated_subject
 from im19_mcp.upstream_mcp import UpstreamMCPRouter
+from im19_mcp.upstream_runtime import build_configured_upstream_router
 from im19_mcp.storage import Vault
 
 logger = logging.getLogger(__name__)
@@ -384,8 +385,13 @@ def create_app(
                          secret=cfg.audit_salt)
         if cfg.deployment_environment == "production" else None
     )
+    effective_upstream_router = upstream_router
+    if effective_upstream_router is None:
+        effective_upstream_router = build_configured_upstream_router(
+            engine=vault.engine,
+        )
     app = create_gateway(
-        cfg, quota=quota, vault=vault, upstream_router=upstream_router,
+        cfg, quota=quota, vault=vault, upstream_router=effective_upstream_router,
     ).streamable_http_app(
         transport_security=TransportSecuritySettings(
             allowed_hosts=[host] + ([resource.hostname + ":443"] if resource.port is None else []),
