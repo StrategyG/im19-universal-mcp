@@ -130,3 +130,8 @@ Use a secure environment/secrets manager rather than sourcing a production crede
 
 Deploy only after completing the external acceptance gates in the [production readiness report](docs/PRODUCTION_READINESS.md). Production configuration refuses the legacy unbound Google flow. Existing credentials without browser proof require reauthorization. The mutation approval ledger remains internal. The prototype write tool is off by default; a human write-approval portal and general provider write adapters are outside this release.
 
+
+
+## Outbound MCP router
+
+The outbound MCP router core is available in `src/im19_mcp/upstream_mcp.py` and is disabled unless a deployment explicitly injects an `UpstreamMCPRouter` into `create_app()`. It requires an approved secret-manager adapter and verified subject-to-tenant mapping. See [router implementation and activation gates](docs/UPSTREAM_MCP_ROUTER.md). It is not a live upstream provider connection and is not production-enabled by default.

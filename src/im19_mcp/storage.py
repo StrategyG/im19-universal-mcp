@@ -441,15 +441,30 @@ class Vault:
                 "oauth_pending_links": max(int(links.rowcount or 0), 0),
             }
 
-    def audit(self, subject: str, service: str, action: str, status: str) -> None:
+    def audit(
+        self, subject: str, service: str, action: str, status: str,
+        *, request_id: str | None = None,
+    ) -> None:
         with self.sessions.begin() as session:
-            session.add(self._audit_record(subject, service, action, status))
+            session.add(self._audit_record(
+                subject, service, action, status, request_id=request_id,
+            ))
 
-    def _audit_record(self, subject: str, service: str, action: str, status: str) -> AuditEvent:
+    def _audit_record(
+        self, subject: str, service: str, action: str, status: str,
+        *, request_id: str | None = None,
+    ) -> AuditEvent:
         pseudonym = hmac.new(self.audit_salt, subject.encode("utf-8"), hashlib.sha256).hexdigest()
+        selected_request_id = request_id or secrets.token_hex(16)
+        if (
+            not isinstance(selected_request_id, str)
+            or not 1 <= len(selected_request_id) <= 64
+            or any(char.isspace() for char in selected_request_id)
+        ):
+            raise ValueError("audit_request_id_invalid")
         return AuditEvent(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 subject_pseudonym=pseudonym, service=service, action=action,
-                status=status, request_id=secrets.token_hex(16),
+                status=status, request_id=selected_request_id,
             )
 
