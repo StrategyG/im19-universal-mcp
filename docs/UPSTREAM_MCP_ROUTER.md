@@ -1,58 +1,74 @@
-# IM19 outbound MCP router implementation
+# IM19 outbound MCP router — runtime wiring candidate v1
 
-Status: router core is implemented behind an explicit deployment injection seam. It is disabled when `create_app()` is called without an `UpstreamMCPRouter`. No provider connection or production activation is claimed by this code change.
+**Status: implementation candidate on `feat/im19-upstream-runtime-wiring-v1`; not merged or deployed.** The existing router core is in `main`; this branch wires an opt-in operator configuration, secret reference resolver and database-backed tenant resolver. No live upstream MCP provider or production secret manager has been connected or verified.
 
-## Architecture
+## Runtime path
 
 ```text
-UGAI remote MCP client
-  -> IM19 authenticated /mcp resource
-    -> verified subject from token context
-    -> operator tenant resolver
-    -> immutable ConnectorRegistry snapshot
-    -> per-connector read-only tool allowlist
-    -> quota admission + redacted audit
-    -> upstream MCP Streamable HTTP session
+UGAI -> IM19 authenticated Streamable HTTP
+     -> verified introspected subject
+     -> active subject-to-tenant binding in PostgreSQL
+     -> immutable operator ConnectorRegistry
+     -> secret://env reference resolved at runtime
+     -> fixed HTTPS upstream + exact host allowlist
+     -> read-only allowlisted MCP tool
+     -> quota admission + redacted audit
+     -> UNTRUSTED_EXTERNAL_DATA result
 ```
 
-## Implemented in this change
+## Candidate implementation
 
-- Frozen connector definitions with validated connector IDs, fixed HTTPS endpoints, exact DNS host allowlists, secret-manager references, exact tenant allowlists, explicit read-only tool allowlists, bounded timeouts, result sizes and concurrency.
-- One connector is bound to exactly one tenant; deploy a distinct connector ID and secret reference for each tenant to prevent shared provider credentials crossing tenant boundaries. Tool schemas containing identity/tenant or credential arguments (for example `subject`, `tenant_id`, `user_id`, `access_token` or `api_key`) are rejected.
-- An immutable registry snapshot with deterministic per-connector and aggregate revisions.
-- An injected `SecretResolver` interface. Only the reference is kept in configuration; the resolved bearer token is used in the HTTP authorization header and never included in logs, tool schemas or results.
-- Upstream Streamable HTTP session initialization and bounded paginated `tools/list` discovery.
-- Namespaced IM19 tool names in the form `{connector_id}__{upstream_tool_name}`; collisions fail startup.
-- Strict, bounded JSON-schema subset validation. Unsupported schema keywords/types are rejected rather than guessed. Dynamic tool signatures expose the allowlisted upstream arguments.
-- Tenant enforcement using a resolver over the verified IM19 subject. Model arguments cannot provide or override subject, tenant, connector endpoint or credentials.
-- Read-only enforcement: every exposed tool must be operator-allowlisted; upstream `readOnlyHint=false` or `destructiveHint=true` makes startup fail.
-- Per-connector semaphore, per-call timeout, bounded arguments/results, quota admission and mandatory STARTED/terminal audit records.
-- Staging and production fail closed when the distributed quota backend is unavailable; only isolated local development may omit it.
-- Pre-audit failure blocks upstream execution. Post-audit failure returns `execution_may_have_completed=true`; callers must reconcile and must not blindly retry.
-- Successful upstream payloads carry `result_classification=UNTRUSTED_EXTERNAL_DATA`. Preserve this label through UGAI task state and user-visible provenance; external text is data, never executable instruction. UGAI must enforce this boundary in its own orchestration/prompt policy.
-- Upstream tool descriptions, property descriptions, and defaults are not forwarded as model-visible metadata. IM19 emits a fixed gateway-authored description and omits provider-supplied argument defaults, because connector metadata is also an untrusted prompt-injection surface. Operators should maintain trusted local documentation for approved tool semantics.
-- Optional router lifecycle integration in `create_gateway()` and `create_app()`. Omitted router means no upstream connectors are loaded.
+- `src/im19_mcp/upstream_runtime.py` parses bounded `IM19_UPSTREAM_CONNECTORS_JSON`, rejects duplicate/unknown keys and raw credential fields, and constructs immutable `ConnectorDefinition` entries.
+- `EnvironmentSecretResolver` only accepts `secret://env/NAME`. Deployment secret management must inject the actual value as `IM19_UPSTREAM_SECRET_NAME`; connector JSON contains the reference only. This adapter is not a direct cloud KMS/Vault integration.
+- `PostgresTenantResolver` resolves the verified MCP subject against `mcp_subject_tenant_bindings` with `status='active'`; database failure or no active binding denies execution. The current schema supports one tenant per subject. Multi-tenant selection is not implemented.
+- `create_app()` loads the configured router at startup if an explicit router was not injected. No config or no enabled entries means the router remains off. Enabled connectors must resolve secrets and pass upstream initialization before startup completes.
+- The Alembic candidate `0007_upstream_tenant_bindings` creates the operator-managed subject/tenant binding. Readiness now requires this schema head.
 
-## Deployment composition
+## Operator configuration
 
-A deployment must explicitly construct the registry and provide organization-specific implementations of:
+Set `IM19_UPSTREAM_CONNECTORS_JSON` only in a protected deployment environment. Example (disabled by default):
 
-1. `SecretResolver`: resolve a `secret://...` reference from the approved secret manager.
-2. `TenantResolver`: map the verified subject from IM19 token introspection to an authoritative tenant identifier.
-3. Connector definitions: operator-owned fixed endpoint, exact hostname, secret reference, tenant allowlist and explicit read-only tool names.
+~~~json
+[
+  {
+    "connector_id": "github",
+    "endpoint": "https://mcp.github.example/mcp",
+    "allowed_hosts": ["mcp.github.example"],
+    "secret_ref": "secret://env/GITHUB_MCP",
+    "read_only_tools": ["search_repositories"],
+    "tenant_allowlist": ["tenant-a"],
+    "enabled": false
+  }
+]
+~~~
 
-Then inject the router into `create_app(settings, upstream_router=router)`. Do not put connector endpoints, credentials, headers, or transport settings in LLM tool arguments. Do not expose an arbitrary registration tool to the model.
+The corresponding credential is injected separately as `IM19_UPSTREAM_SECRET_GITHUB_MCP`. Never put tokens in connector JSON, repository files, issues, PR descriptions, logs or tool arguments.
 
-The current `im19-gateway` command does not auto-load a cloud-specific secret manager or tenant directory. The code deliberately does not guess these provider-specific integrations. Until a deployment entrypoint supplies them, upstream routing stays off. A staging composition should be built and tested with the real identity provider and secret manager before any production rollout.
+After applying the approved migration to a staging database, the operator must bind the verified identity subject to one tenant through a reviewed administrative procedure. The migration intentionally does not seed subjects or tenants. No identity should gain access merely because it exists in the registry.
 
-## Required network controls
+## Security boundaries
 
-Hostname allowlisting is not a complete SSRF defense. Production must independently enforce outbound network policy that prevents loopback, private, link-local and cloud metadata access; block unapproved destinations/ports; prevent DNS rebinding; and monitor egress. Use fixed operator-controlled DNS names, validated TLS, no unrestricted redirects, and separate network identity for each upstream connector. The application-level URL check is only one control in a defense-in-depth boundary.
+- Only fixed HTTPS endpoints, exact allowed DNS hosts, bounded timeouts/results/concurrency and exact read-only tool names are permitted.
+- Upstream tool annotations must declare read-only and not destructive. Dynamic schemas are validated; identity/secret arguments are prohibited.
+- The connector's tenant allowlist and the database's active subject binding must both permit the call.
+- Quota and pre-audit failures deny the upstream call. If terminal audit fails after an upstream call, result is marked uncertain and must be reconciled; never blind retry.
+- Provider tool descriptions/defaults are not trusted instructions. External results are labeled `UNTRUSTED_EXTERNAL_DATA` and must remain data in UGAI.
+- Application endpoint validation is not a complete SSRF defense. Production must add egress firewall policy blocking loopback, private, link-local, metadata IPs, unapproved ports, redirects and DNS rebinding, with monitoring.
+- Only read-only upstream MCP tools are supported in this release. Mutations, shell access and arbitrary filesystem tools are not enabled.
 
-The initial router is read-only. Mutating tools, shell execution, arbitrary filesystem access, provider account linking, publishing, deletion and write approvals are not enabled through this router.
+## Required staging acceptance
 
-## Tests and acceptance
+1. Apply the numbered migration in a staging copy after a verified backup and confirm readiness at `0007_upstream_tenant_bindings`.
+2. Provision a dedicated, least-privilege database login and a reviewed active subject/tenant binding.
+3. Inject a short-lived test connector token using the approved deployment secret manager.
+4. Configure one non-production upstream MCP endpoint with a small read-only allowlist.
+5. Verify upstream `initialize`, `tools/list`, and a read-only tool call through IM19; no direct UGAI-to-provider route is allowed.
+6. Prove wrong tenant, disabled binding, missing/expired secret, quota outage, pre-audit outage, post-audit ambiguity, timeout, oversized response, malformed schema and upstream outage all fail closed.
+7. Test DNS rebinding and egress restrictions at the network layer.
+8. Record exact SHA, migration revision, endpoint class, test timestamp, redacted logs and independent QA reviewer.
 
-`tests/test_upstream_mcp.py` exercises endpoint/secret/tenant validation, immutable registry revisions, schema rejection, tool namespace generation, verified subject/tenant enforcement, read-only tool admission, quota checks, bounded schema execution and audit failure semantics.
+The current candidate CI tests cover local configuration, tenant resolution, async router behavior and existing router contracts. They do not prove live identity, an external secret manager, upstream provider connectivity, network egress policy or production operations.
 
-CI passing these tests proves the local router contracts only. Live acceptance still requires a deployed staging IM19 endpoint, a real upstream MCP provider, real OAuth identity, a production-grade secret manager, a tenant directory, egress controls, failure injection and proof that UGAI uses IM19 exclusively.
+## Production verdict
+
+**NO-GO.** Branch is not merged/deployed; migration is not applied; no secret manager, active tenant bindings, upstream provider, network egress policy, live UGAI integration, DR restore or operator sign-off is evidenced.
