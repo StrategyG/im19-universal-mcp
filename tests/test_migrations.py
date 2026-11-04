@@ -18,13 +18,13 @@ def test_full_upgrade_including_confirmations_and_refresh_leases(tmp_path, monke
     assert {
         "oauth_states", "oauth_credentials", "oauth_pending_links",
         "audit_events", "alembic_version", "governance_approvals",
-        "governance_mutation_receipts", "distributed_rate_windows", "write_approval_requests",
+        "governance_mutation_receipts", "distributed_rate_windows", "write_approval_requests", "mcp_subject_tenant_bindings",
     }.issubset(set(schema.get_table_names()))
     columns = {col["name"] for col in schema.get_columns("oauth_credentials")}
     assert {"refresh_owner", "refresh_until"}.issubset(columns)
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0006_write_approvals"
+            "0007_upstream_tenant_bindings"
         )
     assert "uq_governance_mutation_identity" in {
         constraint["name"] for constraint in
@@ -32,4 +32,7 @@ def test_full_upgrade_including_confirmations_and_refresh_leases(tmp_path, monke
     }
     columns = {col["name"] for col in schema.get_columns("distributed_rate_windows")}
     assert {"key_digest", "bucket_start", "hits", "expires_at"} <= columns
+
+    binding_columns = {col["name"] for col in schema.get_columns("mcp_subject_tenant_bindings")}
+    assert {"subject", "tenant_id", "status", "created_at", "updated_at"} <= binding_columns
     engine.dispose()
