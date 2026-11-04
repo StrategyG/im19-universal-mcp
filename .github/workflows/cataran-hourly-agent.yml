@@ -31,7 +31,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         shell: bash
         run: |
           set -euo pipefail
@@ -39,7 +38,19 @@ jobs:
           mkdir -p "$dir"
 
           gh api "repos/$REPOSITORY" > "$dir/repository.json"
+          DEFAULT_BRANCH="$(jq -r '.default_branch // empty' "$dir/repository.json")"
+          if [[ -z "$DEFAULT_BRANCH" ]]; then
+            echo "Unable to resolve repository default branch." >&2
+            exit 1
+          fi
+          echo "default_branch=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
           gh api "repos/$REPOSITORY/branches/$DEFAULT_BRANCH" > "$dir/branch.json"
+          DEFAULT_SHA="$(jq -r '.commit.sha // empty' "$dir/branch.json")"
+          if [[ -z "$DEFAULT_SHA" ]]; then
+            echo "Unable to resolve default branch commit SHA." >&2
+            exit 1
+          fi
+          echo "default_sha=$DEFAULT_SHA" >> "$GITHUB_OUTPUT"
 
           if gh api "repos/$REPOSITORY/branches/$DEFAULT_BRANCH/protection" > "$dir/branch-protection.json" 2>"$dir/protection-error.txt"; then
             echo "available" > "$dir/protection-state.txt"
@@ -144,8 +155,8 @@ jobs:
           DISPATCH_URL: ${{ vars.CATARAN_AGENT_DISPATCH_URL }}
           DISPATCH_TOKEN: ${{ secrets.CATARAN_AGENT_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          COMMIT_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ steps.snapshot.outputs.default_branch }}
+          COMMIT_SHA: ${{ steps.snapshot.outputs.default_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -280,8 +291,8 @@ jobs:
           payload = {
               "schema_version": "cataran.agent-dispatch.v1",
               "trigger": {"type": os.environ["EVENT_NAME"], "scheduled_cadence": "hourly", "utc_hour_key": utc_hour},
-              "organization_idempotency_key": "cataran:" + utc_hour,
-              "repository_idempotency_key": "cataran:" + utc_hour + ":" + repo,
+              "organization_idempotency_key": ("cataran:hourly:" + utc_hour) if os.environ["EVENT_NAME"] == "schedule" else "cataran:manual:" + os.environ["RUN_ID"],
+              "repository_idempotency_key": (("cataran:hourly:" + utc_hour) if os.environ["EVENT_NAME"] == "schedule" else ("cataran:manual:" + os.environ["RUN_ID"])) + ":" + repo,
               "policy_version": "cataran-agent-operating-model.v1",
               "repository": os.environ["REPOSITORY"],
               "default_branch": os.environ["DEFAULT_BRANCH"],
