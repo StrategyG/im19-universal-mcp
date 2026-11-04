@@ -277,10 +277,11 @@ jobs:
               })
           agents = assignments
           utc_hour = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y%m%dT%H")
-                    payload = {
+          payload = {
               "schema_version": "cataran.agent-dispatch.v1",
               "trigger": {"type": os.environ["EVENT_NAME"], "scheduled_cadence": "hourly", "utc_hour_key": utc_hour},
               "organization_idempotency_key": "cataran:" + utc_hour,
+              "repository_idempotency_key": "cataran:" + utc_hour + ":" + repo,
               "policy_version": "cataran-agent-operating-model.v1",
               "repository": os.environ["REPOSITORY"],
               "default_branch": os.environ["DEFAULT_BRANCH"],
