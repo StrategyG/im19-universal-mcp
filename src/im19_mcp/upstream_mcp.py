@@ -19,7 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Protocol
+from typing import Any, Awaitable, Literal, Mapping, Protocol
 from urllib.parse import urlsplit
 
 
@@ -59,7 +59,9 @@ class SubjectResolver(Protocol):
 
 
 class TenantResolver(Protocol):
-    def __call__(self, verified_subject: str) -> str | None:
+    def __call__(
+        self, verified_subject: str
+    ) -> str | None | Awaitable[str | None]:
         """Map a verified IM19 subject to an authoritative tenant identifier."""
 
 
@@ -705,7 +707,12 @@ class UpstreamMCPRouter:
         if not isinstance(subject, str) or not subject:
             return {"status": "AUTH_REQUIRED"}
         try:
-            tenant = self._tenant_for_subject(subject)
+            tenant_value = self._tenant_for_subject(subject)
+            tenant = (
+                await tenant_value
+                if inspect.isawaitable(tenant_value)
+                else tenant_value
+            )
         except Exception:
             tenant = None
         if not isinstance(tenant, str) or tenant not in definition.tenant_allowlist:
