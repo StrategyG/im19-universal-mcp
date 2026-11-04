@@ -20,19 +20,19 @@ jobs:
   notify:
     # workflow_run has a privileged token. This job reads only event metadata;
     # it never checks out code or downloads artifacts from the triggering run.
-    if: \${{ github.event_name != 'workflow_run' || github.event.workflow_run.name != 'Cataran System Change Notifications' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.name != 'Cataran System Change Notifications' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Compose change or repair notification
         id: compose
         env:
-          GH_EVENT_NAME: \${{ github.event_name }}
-          GH_ACTOR: \${{ github.actor }}
-          GH_REF_NAME: \${{ github.ref_name }}
-          GH_SERVER_URL: \${{ github.server_url }}
-          GH_REPOSITORY: \${{ github.repository }}
-          GH_EVENT_PATH: \${{ github.event_path }}
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_EVENT_PATH: ${{ github.event_path }}
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/cataran-notification.md"
@@ -140,9 +140,9 @@ jobs:
         if: steps.compose.outputs.should_notify == 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: \${{ github.token }}
-          GH_REPOSITORY: \${{ github.repository }}
-          GH_SERVER_URL: \${{ github.server_url }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
           issue_title="[Cataran] Change & Repair Notifications"
