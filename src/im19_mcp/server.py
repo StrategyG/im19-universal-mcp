@@ -26,6 +26,7 @@ from im19_mcp import __version__
 from im19_mcp.distributed_quota import DistributedQuota, QuotaUnavailable
 from im19_mcp.drive import DriveClient, validate_folder_name
 from im19_mcp.google_oauth import GoogleOAuth, OAuthError, SCOPES
+from im19_mcp.generative import register_generative_tools
 from im19_mcp.governance.approvals import ApprovalDenied, ApprovalLedger, DuplicateExecution
 from im19_mcp.governance.write_approval import WriteApprovalPortal
 from im19_mcp.registry import SERVICES, list_services
@@ -165,6 +166,16 @@ def register_tools(
                 return {"status": "DENY", "reason": "subject_not_allowlisted"}
             return {"status": "CONFIGURED_NOT_LIVE_VERIFIED", "service": service,
                     "provider_live_verified": False}
+        if service == "generative":
+            from im19_mcp.generative import GenerativeSettings
+            try:
+                configured = GenerativeSettings.from_env(principal_salt=settings.audit_salt).enabled
+            except ValueError:
+                return {"status": "CONFIGURATION_INVALID", "service": service}
+            return {
+                "status": "CONFIGURED_NOT_LIVE_VERIFIED" if configured else "NOT_CONFIGURED",
+                "service": service, "worker_live_verified": False,
+            }
         if service not in {"youtube", "drive"}:
             return {"status": "NOT_IMPLEMENTED", "service": service}
         denied = tool_quota(user, "mcp:connection-status", limit=60)
@@ -547,6 +558,11 @@ def register_tools(
         return await cloudbrowser_read(
             "cloudbrowser_list_tasks", lambda c: c.list_tasks(page_size, page_token)
         )
+
+    register_generative_tools(
+        server, settings=settings, subject_provider=subject,
+        audit=audit, quota=async_tool_quota,
+    )
 
 
 def create_stdio_server(settings: Settings | None = None) -> MCPServer:
