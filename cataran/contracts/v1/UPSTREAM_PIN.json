@@ -1,0 +1,14 @@
+{
+  "contract_version": "1.0.0",
+  "contract_status": "PROVISIONAL",
+  "canonical_candidate_repository": "StrategyG/Universal-Generative-AI",
+  "canonical_candidate_pull_request": 34,
+  "source_branch": "architecture/cataran-platform-contracts-v1-proposal",
+  "source_commit": "a4b3311f752699db7c411989bcdc7025431d38fd",
+  "schema_path": "contracts/v1/schemas/platform-event-envelope.schema.json",
+  "schema_git_blob_sha1": "5940df93b20712127123a351cb6fdc94649682ee",
+  "fixture_path": "contracts/v1/fixtures/valid/platform-event-envelope.json",
+  "fixture_git_blob_sha1": "75f2b6e6a91536226e3e4f81c4a3dc382501e9e1",
+  "scope": "Common platform event envelope only; this does not prove full task, identity, approval, MCP, A2A, worker, RAG, database or runtime conformance.",
+  "consumer_policy": "Keep this local snapshot provisional. Adopt only after UGAI PR #34 is reviewed, merged and tagged; then pin the released immutable revision."
+}

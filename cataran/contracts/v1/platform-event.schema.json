@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cataran.invalid/contracts/v1/platform-event-envelope.schema.json",
+  "title": "Cataran Platform Event Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "safeJsonValue": {
+      "oneOf": [
+        {
+          "type": [
+            "null",
+            "boolean",
+            "number",
+            "string"
+          ]
+        },
+        {
+          "$ref": "#/$defs/safeObject"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/safeJsonValue"
+          }
+        }
+      ]
+    },
+    "safeObject": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "[Aa]ccess[_-]?[Tt]oken|[Rr]efresh[_-]?[Tt]oken|[Ss]ession[_-]?[Tt]oken|[Bb]earer|[Aa]uthorization|[Aa][Pp][Ii][_-]?[Kk]ey|[Cc]lient[_-]?[Ss]ecret|[Pp]rivate[_-]?[Kk]ey|[Pp]assword|[Cc]ookie|[Cc]redential|[Ss]ecret"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/safeJsonValue"
+      }
+    }
+  },
+  "required": [
+    "contract_version",
+    "message_id",
+    "message_type",
+    "occurred_at",
+    "tenant_id",
+    "project_id",
+    "principal",
+    "service_actor",
+    "task_id",
+    "correlation_id",
+    "causation_id",
+    "sequence",
+    "producer",
+    "payload"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
+    },
+    "message_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "message_type": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[a-z][a-z0-9_.-]+$"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(?:Z|\\+00:00)$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "subject",
+        "principal_id"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1,
+          "pattern": "^https://[^/@?#]+(?:/[^?#]*)?$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "service_actor": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "service",
+            "identity"
+          ],
+          "properties": {
+            "service": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "identity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        }
+      ]
+    },
+    "task_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "version"
+      ],
+      "properties": {
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      }
+    },
+    "trace_context": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "traceparent": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+        },
+        "tracestate": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    },
+    "payload": {
+      "$ref": "#/$defs/safeObject"
+    }
+  }
+}
