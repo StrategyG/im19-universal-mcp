@@ -1,0 +1,338 @@
+name: Cataran Hourly Audit and Agent Dispatch
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+# The audit runner itself is read-only. Remediation agents authenticate through
+# the separately configured Cataran worker service and must use branch + PR flow.
+permissions:
+  actions: read
+  administration: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+  security-events: read
+
+concurrency:
+  group: cataran-hourly-audit-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  audit-and-dispatch:
+    name: Audit repository and request agent work
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Collect GitHub delivery and governance evidence
+        id: snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/cataran-audit"
+          mkdir -p "$dir"
+
+          gh api "repos/$REPOSITORY" > "$dir/repository.json"
+          DEFAULT_BRANCH="$(jq -r '.default_branch // empty' "$dir/repository.json")"
+          if [[ -z "$DEFAULT_BRANCH" ]]; then
+            echo "Unable to resolve repository default branch." >&2
+            exit 1
+          fi
+          echo "default_branch=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+          gh api "repos/$REPOSITORY/branches/$DEFAULT_BRANCH" > "$dir/branch.json"
+          DEFAULT_SHA="$(jq -r '.commit.sha // empty' "$dir/branch.json")"
+          if [[ -z "$DEFAULT_SHA" ]]; then
+            echo "Unable to resolve default branch commit SHA." >&2
+            exit 1
+          fi
+          echo "default_sha=$DEFAULT_SHA" >> "$GITHUB_OUTPUT"
+
+          if gh api "repos/$REPOSITORY/branches/$DEFAULT_BRANCH/protection" > "$dir/branch-protection.json" 2>"$dir/protection-error.txt"; then
+            echo "available" > "$dir/protection-state.txt"
+          else
+            echo "unavailable_or_unprotected" > "$dir/protection-state.txt"
+            printf 'null\n' > "$dir/branch-protection.json"
+          fi
+
+          gh api "repos/$REPOSITORY/pulls?state=open&per_page=100" \
+            --jq '[.[] | {number,title,state,draft,html_url,head_ref:.head.ref,base_ref:.base.ref,updated_at}]' \
+            > "$dir/open-pull-requests.json"
+
+          gh api "repos/$REPOSITORY/issues?state=open&per_page=100" \
+            --jq '[.[] | select(.pull_request == null) | {number,title,state,html_url,updated_at,labels:[.labels[].name]}]' \
+            > "$dir/open-issues.json"
+
+          gh api "repos/$REPOSITORY/actions/runs?branch=$DEFAULT_BRANCH&per_page=20" \
+            --jq '[.workflow_runs[]? | {name,status,conclusion,head_sha,created_at,html_url}]' \
+            > "$dir/recent-workflow-runs.json"
+
+          if gh api "repos/$REPOSITORY/dependabot/alerts?state=open&per_page=100" \
+              --jq '[.[]? | {number,state,security_advisory:.security_advisory.summary,security_severity:.security_advisory.severity,html_url}]' \
+              > "$dir/dependabot-alerts.json" 2>"$dir/dependabot-error.txt"; then
+            echo "available" > "$dir/dependabot-state.txt"
+          else
+            printf '[]\n' > "$dir/dependabot-alerts.json"
+            echo "unavailable_or_disabled" > "$dir/dependabot-state.txt"
+          fi
+
+          if gh api "repos/$REPOSITORY/code-scanning/alerts?state=open&per_page=100" \
+              --jq '[.[]? | {number,state,rule:.rule.id,security_severity:.rule.security_severity_level,html_url}]' \
+              > "$dir/code-scanning-alerts.json" 2>"$dir/code-scanning-error.txt"; then
+            echo "available" > "$dir/code-scanning-state.txt"
+          else
+            printf '[]\n' > "$dir/code-scanning-alerts.json"
+            echo "unavailable_or_disabled" > "$dir/code-scanning-state.txt"
+          fi
+
+          python - "$dir" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, pathlib, sys
+          d = pathlib.Path(sys.argv[1])
+          summary = pathlib.Path(sys.argv[2])
+          def load(name, default):
+              try: return json.loads((d / name).read_text())
+              except Exception: return default
+          repo = load("repository.json", {})
+          branch = load("branch.json", {})
+          prs = load("open-pull-requests.json", [])
+          issues = load("open-issues.json", [])
+          runs = load("recent-workflow-runs.json", [])
+          dependabot = load("dependabot-alerts.json", [])
+          code = load("code-scanning-alerts.json", [])
+          protected = branch.get("protected")
+          lines = [
+              "## Cataran hourly repository audit",
+              "",
+              f"- Repository: {repo.get('full_name', 'unknown')}",
+              f"- Default branch: {branch.get('name', 'unknown')}",
+              f"- Default-branch SHA: {(branch.get('commit') or {}).get('sha', 'unknown')}",
+              f"- Branch protection reported by branch API: {protected if protected is not None else 'UNKNOWN'}",
+              f"- Protection endpoint: {(d / 'protection-state.txt').read_text().strip()}",
+              f"- Open pull requests (first 100): {len(prs)}",
+              f"- Open issues (first 100): {len(issues)}",
+              f"- Open Dependabot alerts returned: {len(dependabot)} ({(d / 'dependabot-state.txt').read_text().strip()})",
+              f"- Open code-scanning alerts returned: {len(code)} ({(d / 'code-scanning-state.txt').read_text().strip()})",
+              "",
+              "### Recent workflow runs",
+          ]
+          if runs:
+              for run in runs[:10]:
+                  lines.append(f"- [{run.get('name','workflow')}]({run.get('html_url','#')}): {run.get('status')}/{run.get('conclusion')} — {(run.get('head_sha') or '')[:12]}")
+          else:
+              lines.append("- No recent workflow runs returned.")
+          lines += ["", "### Open P0/P1 work candidates"]
+          priority = [i for i in issues if any(str(label).lower() in ("p0","p1","priority:p0","priority:p1") for label in i.get("labels", []))]
+          if priority:
+              for issue in priority[:30]:
+                  lines.append(f"- [#{issue['number']} {issue['title']}]({issue['html_url']})")
+          else:
+              lines.append("- No P0/P1-labelled issues in the first 100 open issues.")
+          lines += ["", "This is a metadata audit, not proof that tests, deployment, tenant isolation, backup/restore, or runtime integrations passed."]
+          summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          snapshot = {
+              "repository": repo.get("full_name"),
+              "default_branch": branch.get("name"),
+              "default_branch_sha": (branch.get("commit") or {}).get("sha"),
+              "default_branch_protected": protected,
+              "protection_endpoint_state": (d / "protection-state.txt").read_text().strip(),
+              "open_pull_requests": prs,
+              "open_issues": issues,
+              "recent_workflow_runs": runs,
+              "dependabot_alerts": dependabot,
+              "dependabot_state": (d / "dependabot-state.txt").read_text().strip(),
+              "code_scanning_alerts": code,
+              "code_scanning_state": (d / "code-scanning-state.txt").read_text().strip(),
+          }
+          (d / "audit-snapshot.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+          PY
+
+      - name: Dispatch audit and remediation request to Cataran agents
+        env:
+          DISPATCH_URL: ${{ vars.CATARAN_AGENT_DISPATCH_URL }}
+          DISPATCH_TOKEN: ${{ secrets.CATARAN_AGENT_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ steps.snapshot.outputs.default_branch }}
+          COMMIT_SHA: ${{ steps.snapshot.outputs.default_sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$DISPATCH_URL" || -z "$DISPATCH_TOKEN" ]]; then
+            {
+              echo ""
+              echo "## Agent execution status"
+              echo "BLOCKED — worker endpoint is not configured. Set the organization/repository variable CATARAN_AGENT_DISPATCH_URL and secret CATARAN_AGENT_TOKEN after deploying the authenticated worker."
+              echo ""
+              echo "The audit snapshot was collected, but no Agent 01–09 was invoked and no repository changes were attempted."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python - "$RUNNER_TEMP/cataran-audit/audit-snapshot.json" <<'PY'
+          import json, os, sys, urllib.parse, urllib.request
+          from pathlib import Path
+
+          url = os.environ["DISPATCH_URL"]
+          parsed = urllib.parse.urlsplit(url)
+          if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+              raise SystemExit("CATARAN_AGENT_DISPATCH_URL must be a valid HTTPS URL without embedded credentials or fragment.")
+
+          snapshot = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          repo = os.environ["REPOSITORY"]
+          role_map = [
+              {
+                  "id": "01",
+                  "role": "independent_production_auditor",
+                  "authority": "independent_audit_only",
+                  "read_access": "all_seven_repositories",
+                  "write_access": False,
+                  "primary_repositories": ["RAG_Cerdas","android-ai-universal-connector","im19-universal-mcp","Cloudbrowser","Universal-Generative-AI","REVORA_IDE","ai-notebook-studio-v"],
+                  "acceptance": "Independently verify exact-SHA evidence, score 0-100, list failed mandatory gates; cannot approve own work."
+              },
+              {
+                  "id": "02",
+                  "role": "UGAI_principal_AI_engineer",
+                  "authority": "reasoning_model_routing_decision_runtime_workflow_orchestration",
+                  "primary_repositories": ["Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "Universal-Generative-AI",
+                  "writable_path_classes": ["UGAI reasoning/provider/runtime/workflow source and tests explicitly named in one task"],
+                  "acceptance": "Reasoning and decision pipeline tests, provider fallback and safety tests, workflow state/idempotency evidence."
+              },
+              {
+                  "id": "03",
+                  "role": "architecture_governance_principal",
+                  "authority": "canonical_contracts_ADRs_component_ownership_compatibility_policy",
+                  "primary_repositories": ["Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "Universal-Generative-AI",
+                  "writable_path_classes": ["docs/operations/**","docs/architecture/**","schemas/**","contracts/**; exact paths must be named by task"],
+                  "acceptance": "Versioned contract source, owner matrix, compatibility fixtures and migration/deprecation policy; review contract impact in all consumers. Breaking changes require approval by the Master Architect or named human owner; Agent 03 cannot self-approve."
+              },
+              {
+                  "id": "04",
+                  "role": "AI_Notebook_principal_engineer",
+                  "authority": "user_application_frontend_API_workspace_notebook_execution_boundary",
+                  "primary_repositories": ["ai-notebook-studio-v"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": repo == "ai-notebook-studio-v",
+                  "writable_path_classes": ["Notebook client/API/UI/workspace/execution code and tests explicitly named in one task"],
+                  "acceptance": "Verified identity and tenant authorization, UI/WebView asset integrity, durable task client, isolated execution and negative tenant tests."
+              },
+              {
+                  "id": "05",
+                  "role": "database_knowledge_principal_engineer",
+                  "authority": "database_schema_migrations_RAG_ingestion_retrieval_evaluation_backup_restore",
+                  "primary_repositories": ["RAG_Cerdas","Universal-Generative-AI"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": ["RAG_Cerdas","Universal-Generative-AI"].includes(repo),
+                  "writable_path_classes": ["RAG ingestion/retrieval/evaluation, approved database adapters, migrations and data tests explicitly named in one task"],
+                  "acceptance": "Migration forward/rollback, tenant/RLS/integrity tests, provenance and reviewed qrels; no invented labels or production writes."
+              },
+              {
+                  "id": "06",
+                  "role": "software_engineering_principal",
+                  "authority": "assigned_implementation_debugging_refactoring_quality_performance",
+                  "primary_repositories": ["task_assigned_repository_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["Only the exact repository/path allowlist and task branch recorded in the assigned GitHub issue; no default-branch writes"],
+                  "acceptance": "Reproducible defect, minimal scoped fix, tests, no regressions, exact-SHA evidence and review."
+              },
+              {
+                  "id": "07",
+                  "role": "devops_infrastructure_principal",
+                  "authority": "CI_CD_workflows_containers_deployment_manifests_observability_runbooks",
+                  "primary_repositories": ["all_seven_repositories_in_infrastructure_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": [".github/workflows/**","Docker/Compose/infrastructure manifests, monitoring and runbooks only when listed in the task"],
+                  "acceptance": "Reproducible CI, least privilege, secret isolation, rollback and monitoring evidence; no secret/ruleset/environment administration or production deployment."
+              },
+              {
+                  "id": "08",
+                  "role": "QA_security_reliability_principal",
+                  "authority": "test_strategy_security_checks_regression_reliability_remediation",
+                  "primary_repositories": ["all_seven_repositories_in_test_and_security_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["tests/**","security test harnesses and scanning configuration explicitly listed in the task; remediation source only if separately assigned"],
+                  "acceptance": "Test counts and outcomes, threat/negative tests, no self-approval, no destructive live tests or risk acceptance."
+              },
+              {
+                  "id": "09",
+                  "role": "system_integration_optimization_principal",
+                  "authority": "cross_repository_adapters_contract_compatibility_E2E_performance",
+                  "primary_repositories": ["all_seven_repositories_in_integration_paths_only"],
+                  "read_access": "all_seven_repositories",
+                  "write_access": True,
+                  "writable_path_classes": ["adapters/**","integration/**","contract compatibility and E2E fixtures explicitly listed in the task"],
+                  "acceptance": "Cross-repo contract compatibility, tenant/correlation integrity, negative end-to-end cases and measured performance."
+              }
+          ]
+          assignments = []
+          for agent in role_map:
+              assignments.append({
+                  **agent,
+                  "eligible_for_task": agent["id"] == "01" or agent["write_access"] is True,
+                  "task_owner_required": agent["id"] != "01",
+                  "single_writer_enforced": True,
+                  "task_path_allowlist_required": agent["id"] != "01"
+              })
+          agents = assignments
+          utc_hour = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y%m%dT%H")
+          payload = {
+              "schema_version": "cataran.agent-dispatch.v1",
+              "trigger": {"type": os.environ["EVENT_NAME"], "scheduled_cadence": "hourly", "utc_hour_key": utc_hour},
+              "organization_idempotency_key": ("cataran:hourly:" + utc_hour) if os.environ["EVENT_NAME"] == "schedule" else "cataran:manual:" + os.environ["RUN_ID"],
+              "repository_idempotency_key": (("cataran:hourly:" + utc_hour) if os.environ["EVENT_NAME"] == "schedule" else ("cataran:manual:" + os.environ["RUN_ID"])) + ":" + repo,
+              "policy_version": "cataran-agent-operating-model.v1",
+              "repository": os.environ["REPOSITORY"],
+              "default_branch": os.environ["DEFAULT_BRANCH"],
+              "observed_commit_sha": os.environ["COMMIT_SHA"],
+              "run": {"id": os.environ["RUN_ID"], "attempt": os.environ["RUN_ATTEMPT"], "url": os.environ["RUN_URL"]},
+              "agents": agents,
+              "repository_scope": {
+                  "current_repository": repo,
+                  "only_agents_with_write_access_may_receive_implementation_tasks": True,
+                  "read_access_does_not_imply_write_ownership": True,
+                  "task_must_name_one_owner_and_exact_paths": True
+              },
+              "task_checkpoint": {
+                  "checkpoint_cadence": "hourly",
+                  "checkpoint_is_not_a_task_deadline": True,
+                  "resume_unfinished_from_durable_task_record": True,
+                  "assign_next_unblocked_task_only_after_acceptance": True
+              },
+              "requested_mode": "audit_prioritize_remediate_reverify",
+              "stop_condition": "Stop only when Agent 01 independently verifies a 90-100/100 production-readiness score and every mandatory P0/security/recovery/release gate passes.",
+              "continuation_policy": "Carry unfinished work forward; assign the next highest-priority unblocked task to a completed worker; never mark work complete without exact-SHA evidence.",
+              "write_policy": {
+                  "allowed": "Create task branches, commits on task branches, tests, and pull requests; update assigned issue status and evidence.",
+                  "forbidden": "Direct writes to default branch; merge or release; change secrets, repository rules, environments, deployments, production infrastructure, databases, or provider data; bypass approvals.",
+                  "branch_prefix": "agents/agent-<id>/",
+                  "require_review": True,
+                  "one_writer_per_task": True
+              },
+              "audit_snapshot": snapshot
+          }
+          body = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(
+              url, data=body, method="POST",
+              headers={"Authorization": "Bearer " + os.environ["DISPATCH_TOKEN"], "Content-Type":"application/json", "Accept":"application/json"}
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  result = response.read(8192).decode("utf-8", "replace")
+                  print("Cataran worker accepted dispatch; HTTP", response.status)
+                  print(result[:2000])
+          except Exception as exc:
+              raise SystemExit(f"Cataran worker dispatch failed: {type(exc).__name__}: {exc}")
+          PY
