@@ -26,6 +26,7 @@ from starlette.responses import JSONResponse
 from starlette.responses import RedirectResponse, HTMLResponse
 
 from im19_mcp.config import Settings
+from im19_mcp.deployment_composition import build_upstream_router
 from im19_mcp import __version__
 from im19_mcp.browser_auth import BrowserAuthorization, COOKIE_NAME, browser_digest
 from im19_mcp.http_security import GatewaySecurityMiddleware
@@ -372,6 +373,11 @@ def create_app(
 ):
     cfg = settings or Settings.from_env()
     cfg.require_remote()
+    # No connector is activated unless complete operator configuration is
+    # present. Partial configuration fails startup rather than silently falling
+    # back to a less governed path.
+    if upstream_router is None:
+        upstream_router = build_upstream_router(cfg)
     resource = urlsplit(cfg.mcp_resource)
     host = resource.netloc
     if not host:

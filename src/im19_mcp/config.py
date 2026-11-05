@@ -51,6 +51,11 @@ class Settings:
     cloudbrowser_api_key: str = field(default="", repr=False)
     cloudbrowser_allowed_subjects: tuple[str, ...] = ()
     cloudbrowser_allow_raw_tasks: bool = False
+    # Operator-controlled upstream router configuration. Connector definitions
+    # contain secret references only; secret bytes are read from mounted files.
+    upstream_connectors_json: str = field(default="", repr=False)
+    upstream_tenant_map_json: str = field(default="", repr=False)
+    upstream_secret_root: str = "/run/secrets/im19/upstream"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -89,6 +94,11 @@ class Settings:
             cloudbrowser_allow_raw_tasks=os.getenv(
                 "IM19_CLOUDBROWSER_ALLOW_RAW_TASKS", "false"
             ).strip().lower() == "true",
+            upstream_connectors_json=os.getenv("IM19_UPSTREAM_CONNECTORS_JSON", ""),
+            upstream_tenant_map_json=os.getenv("IM19_UPSTREAM_TENANT_MAP_JSON", ""),
+            upstream_secret_root=os.getenv(
+                "IM19_UPSTREAM_SECRET_ROOT", "/run/secrets/im19/upstream"
+            ).strip(),
         )
 
     def browser_enabled(self) -> bool:
