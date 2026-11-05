@@ -58,7 +58,9 @@ def _parse_json(raw: str, *, name: str) -> Any:
         raise ValueError(f"{name}_missing_or_too_large")
     try:
         return json.loads(raw, object_pairs_hook=_unique_object)
-    except (json.JSONDecodeError, UnicodeError) as exc:
+    except (ValueError, UnicodeError) as exc:
+        # object_pairs_hook raises ValueError for duplicate keys; normalize it
+        # at the configuration boundary so callers receive a stable error code.
         raise ValueError(f"{name}_invalid_json") from exc
 
 
@@ -149,6 +151,7 @@ class StaticTenantResolver:
         for subject, tenant_id in mapping.items():
             if (
                 not isinstance(subject, str)
+                or subject in {"*", "**"}
                 or not _SUBJECT.fullmatch(subject)
                 or not isinstance(tenant_id, str)
                 or not _TENANT.fullmatch(tenant_id)
